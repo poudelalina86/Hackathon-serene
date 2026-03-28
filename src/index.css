@@ -1,0 +1,55 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800;900&display=swap');
+
+body {
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 0px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin-animation {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.5; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.pulse-animation {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes voicebar {
+  0% { transform: scaleY(0.35); opacity: 0.5; }
+  50% { transform: scaleY(1); opacity: 1; }
+  100% { transform: scaleY(0.35); opacity: 0.5; }
+}
+
+.voice-bars {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.voice-bar {
+  width: 4px;
+  height: 18px;
+  border-radius: 999px;
+  background: #ef4444;
+  transform-origin: center;
+  animation: voicebar 0.9s ease-in-out infinite;
+}
+
+.voice-bar:nth-child(2) { animation-delay: 0.12s; opacity: 0.85; }
+.voice-bar:nth-child(3) { animation-delay: 0.24s; opacity: 0.7; }
