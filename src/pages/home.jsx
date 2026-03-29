@@ -47,7 +47,7 @@ import {
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts'
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiPlus, FiTrash2, FiEdit2, FiCheckCircle, FiClock, FiMessageSquare, FiTrendingUp, FiSettings, FiActivity, FiSearch, FiSend, FiX, FiCheck, FiLayout, FiAward, FiUser, FiZap, FiPlay, FiSquare, FiBookOpen } from 'react-icons/fi'
+import { FiPlus, FiTrash2, FiEdit2, FiCheckCircle, FiClock, FiMessageSquare, FiTrendingUp, FiSettings, FiActivity, FiSearch, FiSend, FiX, FiCheck, FiLayout, FiAward, FiUser, FiZap, FiPlay, FiSquare, FiRefreshCw } from 'react-icons/fi'
 import { calculateLevel, getXpForNextLevel } from '../utils/lifeEngine'
 import { getOracleResponse } from '../utils/oracleAgent'
 import { requestNotificationPermission, showLocalNotification, playMissionSound, ensureAudioUnlocked } from '../utils/notificationService'
@@ -660,6 +660,19 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
         } catch (err) { console.error("Delete Task Error:", err) }
     }
 
+    const handleUndo = async () => {
+        try {
+            await fetch(`${API_BASE}/tasks/${USERNAME}/undo-planner`, { method: 'POST' })
+            await refreshDailyState()
+            const planRes = await fetch(`${API_BASE}/daily/${USERNAME}/plan`)
+            const planData = await planRes.json()
+            setSchedule({ fixed: planData.filter(t => !t.is_custom), flexible: [] })
+            setCustomTasks(planData.filter(t => t.is_custom))
+        } catch (e) {
+            console.error("Undo error", e)
+        }
+    }
+
     const openEditModal = (task, e) => {
         e.stopPropagation()
         setEditingTask(task)
@@ -798,13 +811,13 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 </HStack>
             </Box>
 
-	        <VStack spacing={2} align="stretch">
-	            <Button leftIcon={<FiLayout />} justifyContent="start" variant={tabIndex === 0 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(0)}>Focus</Button>
-	            <Button leftIcon={<FiCheckCircle />} justifyContent="start" variant={tabIndex === 1 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(1)}>Log</Button>
-	            <Button leftIcon={<FiAward />} justifyContent="start" variant={tabIndex === 2 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(2)}>Stats</Button>
-	            <Button leftIcon={<FiUser />} justifyContent="start" variant={tabIndex === 3 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(3)}>Profile</Button>
-	            <Button leftIcon={<FiBookOpen />} justifyContent="start" variant="ghost" colorScheme="teal" onClick={() => navigate('/blog')}>Community Blog</Button>
-	        </VStack>
+            <VStack spacing={2} align="stretch">
+                <Button leftIcon={<FiLayout />} justifyContent="start" variant={tabIndex === 0 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(0)}>Focus</Button>
+                <Button leftIcon={<FiCheckCircle />} justifyContent="start" variant={tabIndex === 1 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(1)}>Log</Button>
+                <Button leftIcon={<FiAward />} justifyContent="start" variant={tabIndex === 2 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(2)}>Stats</Button>
+                <Button leftIcon={<FiUser />} justifyContent="start" variant={tabIndex === 3 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(3)}>Profile</Button>
+                <Button leftIcon={<FiBookOpen />} justifyContent="start" variant="ghost" colorScheme="teal" onClick={() => navigate('/blog')}>Community Blog</Button>
+            </VStack>
 
             <Divider />
 
@@ -863,22 +876,22 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 {/* Mobile Header (Hidden on Laptop) */}
                 {!embedded && (
                     <Box display={{ base: "block", lg: "none" }} bg={cardBg} pt={10} pb={6} px={6} shadow="sm" borderBottomRadius="3xl">
-                    <Container maxW="container.md" p={0}>
-                        <HStack justify="space-between" align="center" mb={6}>
-                            <HStack spacing={4}>
-                                <Avatar size="lg" src="https://bit.ly/tioluwani-kolawole" border="2px solid" borderColor="blue.500" />
-                                <VStack align="start" spacing={0}>
-                                    <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
-                                    <Heading size="lg" fontWeight="900" letterSpacing="-1px">Life Agent</Heading>
-                                </VStack>
+                        <Container maxW="container.md" p={0}>
+                            <HStack justify="space-between" align="center" mb={6}>
+                                <HStack spacing={4}>
+                                    <Avatar size="lg" src="https://bit.ly/tioluwani-kolawole" border="2px solid" borderColor="blue.500" />
+                                    <VStack align="start" spacing={0}>
+                                        <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
+                                        <Heading size="lg" fontWeight="900" letterSpacing="-1px">Life Agent</Heading>
+                                    </VStack>
+                                </HStack>
+                                <Box bg="blue.50" p={3} borderRadius="xl" textAlign="center">
+                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="blue.600">{processStats.days}</Text>
+                                    <Text fontSize="10px" fontWeight="900" color="blue.400">DAYS IN PROCESS</Text>
+                                </Box>
                             </HStack>
-                            <Box bg="blue.50" p={3} borderRadius="xl" textAlign="center">
-                                <Text fontSize="xl" fontWeight="900" lineHeight="1" color="blue.600">{processStats.days}</Text>
-                                <Text fontSize="10px" fontWeight="900" color="blue.400">DAYS IN PROCESS</Text>
-                            </Box>
-                        </HStack>
-                        <Progress value={progressPercent} size="sm" colorScheme="blue" borderRadius="full" />
-                    </Container>
+                            <Progress value={progressPercent} size="sm" colorScheme="blue" borderRadius="full" />
+                        </Container>
                     </Box>
                 )}
 
@@ -888,16 +901,16 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                     mt={embedded ? 0 : { base: 6, lg: 12 }}
                     p={4}
                 >
-		                    <Tabs index={tabIndex} onChange={handleTabChange} variant="soft-rounded" colorScheme="blue">
-		                        <TabList
-		                            display={embedded ? "flex" : { base: "flex", lg: "none" }}
-		                            bg={cardBg} p={2} borderRadius="2xl" shadow="sm" mb={6} justifyContent="center" gap={2}
-		                        >
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiLayout} /><Text fontWeight="700">FOCUS</Text></HStack></Tab>
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiCheckCircle} /><Text fontWeight="700">LOG</Text></HStack></Tab>
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiAward} /><Text fontWeight="700">STATS</Text></HStack></Tab>
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiUser} /><Text fontWeight="700">PROFILE</Text></HStack></Tab>
-	                        </TabList>
+                    <Tabs index={tabIndex} onChange={handleTabChange} variant="soft-rounded" colorScheme="blue">
+                        <TabList
+                            display={embedded ? "flex" : { base: "flex", lg: "none" }}
+                            bg={cardBg} p={2} borderRadius="2xl" shadow="sm" mb={6} justifyContent="center" gap={2}
+                        >
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiLayout} /><Text fontWeight="700">FOCUS</Text></HStack></Tab>
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiCheckCircle} /><Text fontWeight="700">LOG</Text></HStack></Tab>
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiAward} /><Text fontWeight="700">STATS</Text></HStack></Tab>
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiUser} /><Text fontWeight="700">PROFILE</Text></HStack></Tab>
+                        </TabList>
 
                         <TabPanels>
                             {/* FOCUS TAB */}
@@ -939,14 +952,14 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                                     const aqSrc = activeQuest?.task_source || (activeQuest?.is_custom ? 'custom' : 'default')
                                                     const scheme = aqStatus === 'completed' ? 'green'
                                                         : aqStatus === 'executing' ? 'orange'
-                                                        : aqSrc === 'custom' ? 'purple'
-                                                        : aqSrc === 'ai' ? 'teal'
-                                                        : 'blue'
+                                                            : aqSrc === 'custom' ? 'purple'
+                                                                : aqSrc === 'ai' ? 'teal'
+                                                                    : 'blue'
                                                     const label = aqStatus === 'completed' ? 'MISSION COMPLETE'
                                                         : aqStatus === 'executing' ? 'IN PROGRESS'
-                                                        : aqSrc === 'custom' ? '✏️ CUSTOM MISSION'
-                                                        : aqSrc === 'ai' ? '🤖 AI MISSION'
-                                                        : '⚡ ACTIVE MISSION'
+                                                            : aqSrc === 'custom' ? '✏️ CUSTOM MISSION'
+                                                                : aqSrc === 'ai' ? '🤖 AI MISSION'
+                                                                    : '⚡ ACTIVE MISSION'
                                                     return <Badge colorScheme={scheme} px={3} borderRadius="md" mb={2}>{label}</Badge>
                                                 })()}
                                                 <Heading size="2xl" fontWeight="900" letterSpacing="-1.5px">{activeQuest?.activity || 'Calculating...'}</Heading>
@@ -1026,9 +1039,22 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
 
                             {/* LOG TAB — Read-Only Status View */}
                             <TabPanel p={0}>
-                                <HStack justify="space-between" mb={6}>
-                                    <Heading size="md" color="gray.700">Operations Log</Heading>
-                                    <Button leftIcon={<FiPlus />} colorScheme="blue" size="sm" borderRadius="full" shadow="sm" onClick={openAddModal}>Add Mission</Button>
+                                <HStack justify="space-between" align="center" mb={6}>
+                                    <VStack align="start" spacing={1}>
+                                        <HStack>
+                                            <Heading size="md" fontWeight="900">Task Log</Heading>
+                                            <IconButton
+                                                icon={<FiRefreshCw />}
+                                                size="xs"
+                                                variant="ghost"
+                                                colorScheme="purple"
+                                                title="Undo AI Optimizer"
+                                                onClick={handleUndo}
+                                            />
+                                        </HStack>
+                                        <Text fontSize="xs" fontWeight="800" color="gray.400">{completedQuests.length} missions completed overall</Text>
+                                    </VStack>
+                                    <Button leftIcon={<FiPlus />} colorScheme="blue" borderRadius="full" size="sm" shadow="sm" onClick={openAddModal}>Add Mission</Button>
                                 </HStack>
 
                                 {['Morning', 'Afternoon', 'Evening'].map(period => {
@@ -1050,14 +1076,14 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                                     // Border colour reflects source
                                                     const borderCol = isCompleted ? "green.100"
                                                         : isExecuting ? "orange.100"
-                                                        : isCustomTask ? "purple.100"
-                                                        : isAiTask ? "teal.100"
-                                                        : "gray.50"
+                                                            : isCustomTask ? "purple.100"
+                                                                : isAiTask ? "teal.100"
+                                                                    : "gray.50"
                                                     const circleCol = isCompleted ? "green.500"
                                                         : isExecuting ? "orange.500"
-                                                        : isCustomTask ? "purple.500"
-                                                        : isAiTask ? "teal.500"
-                                                        : "gray.100"
+                                                            : isCustomTask ? "purple.500"
+                                                                : isAiTask ? "teal.500"
+                                                                    : "gray.100"
                                                     return (
                                                         <MotionBox key={`${period}-${i}`} bg={cardBg} p={5} borderRadius="2xl" shadow="sm" border="1px solid"
                                                             borderColor={borderCol}
@@ -1123,9 +1149,9 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                 })}
                             </TabPanel>
 
-	                            {/* STATS TAB */}
-	                            <TabPanel p={0}>
-                                
+                            {/* STATS TAB */}
+                            <TabPanel p={0}>
+
 
                                 {/* Daily History Chart */}
                                 {progress.history?.length > 0 && (
@@ -1151,7 +1177,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                     </Box>
                                 )}
 
-                        
+
 
                                 {/* ── Mental Health Insights ── */}
                                 <Box mt={8}>
@@ -1163,69 +1189,69 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                     </HStack>
                                     <MentalHealthStats apiBase={API_BASE} username={USERNAME} />
                                 </Box>
-	                            </TabPanel>
+                            </TabPanel>
 
-	                            {/* PROFILE TAB */}
-	                            <TabPanel p={0}>
-	                                <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8}>
-	                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
-	                                        <HStack spacing={4} mb={6}>
-	                                            <Avatar size="lg" src="/logo.png" name="Life Agent" border="2px solid" borderColor="blue.500" />
-	                                            <VStack align="start" spacing={0}>
-	                                                <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
-	                                                <Heading size="md" fontWeight="900">Life Agent</Heading>
-	                                                <Text fontSize="sm" color="gray.500" fontWeight="700">@{USERNAME}</Text>
-	                                            </VStack>
-	                                        </HStack>
-	                                        <Divider mb={6} />
-	                                        <SimpleGrid columns={2} spacing={5}>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Level</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{level}</Text>
-	                                            </Box>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">XP</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{xp}</Text>
-	                                            </Box>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Streak</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="orange.500" lineHeight="1">{progress.streak}</Text>
-	                                            </Box>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Completions</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="green.500" lineHeight="1">{progress.total_tasks_completed}</Text>
-	                                            </Box>
-	                                        </SimpleGrid>
-	                                    </Box>
+                            {/* PROFILE TAB */}
+                            <TabPanel p={0}>
+                                <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8}>
+                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
+                                        <HStack spacing={4} mb={6}>
+                                            <Avatar size="lg" src="/logo.png" name="Life Agent" border="2px solid" borderColor="blue.500" />
+                                            <VStack align="start" spacing={0}>
+                                                <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
+                                                <Heading size="md" fontWeight="900">Life Agent</Heading>
+                                                <Text fontSize="sm" color="gray.500" fontWeight="700">@{USERNAME}</Text>
+                                            </VStack>
+                                        </HStack>
+                                        <Divider mb={6} />
+                                        <SimpleGrid columns={2} spacing={5}>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Level</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{level}</Text>
+                                            </Box>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">XP</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{xp}</Text>
+                                            </Box>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Streak</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="orange.500" lineHeight="1">{progress.streak}</Text>
+                                            </Box>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Completions</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="green.500" lineHeight="1">{progress.total_tasks_completed}</Text>
+                                            </Box>
+                                        </SimpleGrid>
+                                    </Box>
 
-	                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
-	                                        <Heading size="md" mb={6}>Process Age</Heading>
-	                                        <SimpleGrid columns={2} spacing={5} mb={8}>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Days</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.days}</Text>
-	                                            </Box>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Weeks</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.weeks}</Text>
-	                                            </Box>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Months</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.months}</Text>
-	                                            </Box>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Years</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.years}</Text>
-	                                            </Box>
-	                                        </SimpleGrid>
-	                                        <Text fontSize="sm" color="gray.500" fontWeight="700">
-	                                            Your stats evolve automatically from your daily actions. Keep executing missions and let Serene calibrate your trajectory.
-	                                        </Text>
-	                                    </Box>
-	                                </SimpleGrid>
-	                            </TabPanel>
-	                        </TabPanels>
-	                    </Tabs>
+                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
+                                        <Heading size="md" mb={6}>Process Age</Heading>
+                                        <SimpleGrid columns={2} spacing={5} mb={8}>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Days</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.days}</Text>
+                                            </Box>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Weeks</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.weeks}</Text>
+                                            </Box>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Months</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.months}</Text>
+                                            </Box>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Years</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.years}</Text>
+                                            </Box>
+                                        </SimpleGrid>
+                                        <Text fontSize="sm" color="gray.500" fontWeight="700">
+                                            Your stats evolve automatically from your daily actions. Keep executing missions and let Serene calibrate your trajectory.
+                                        </Text>
+                                    </Box>
+                                </SimpleGrid>
+                            </TabPanel>
+                        </TabPanels>
+                    </Tabs>
                 </Container>
             </Box>
 

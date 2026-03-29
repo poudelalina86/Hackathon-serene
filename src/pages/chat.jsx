@@ -249,8 +249,14 @@ export function Chat() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ conversation_id: sid }),
             })
-            await fetch(`${API_BASE}/sessions/${USERNAME}/${sid}/analyze`, { method: 'POST' })
-            setAnalysis({ saved: true })
+            const analyzeRes = await fetch(`${API_BASE}/sessions/${USERNAME}/${sid}/analyze`, { method: 'POST' });
+            const analyzeData = await analyzeRes.json();
+            // Save the data to React state so the modal can read it!
+            setAnalysis({ 
+                saved: true, 
+                insights: analyzeData.analysis,
+                optimization: analyzeData.schedule_optimization
+            });
         } catch (e) {
             setAnalysis({ saved: true }) // still show success — data may have saved partially
         } finally {
@@ -991,21 +997,70 @@ export function Chat() {
                                 <Circle size="16" bg="green.50" borderWidth="2px" borderColor="green.200">
                                     <Text fontSize="3xl">✓</Text>
                                 </Circle>
-                                <VStack spacing={1}>
-                                    <Text fontWeight="900" fontSize="lg" color="green.700">Conversation Saved</Text>
-                                    <Text fontSize="sm" color="gray.400" fontWeight="600" textAlign="center">
-                                        Your session has been stored. View insights in the Stats tab.
-                                    </Text>
+                                <VStack spacing={3} w="full">
+                                    <Text fontWeight="900" fontSize="lg" color="green.700">Reflections Captured</Text>
+                                    
+                                    {/* Optimization Summary */}
+                                    {analysis?.optimization && (
+                                        <Box w="full" bg="purple.50" p={5} borderRadius="2xl" borderWidth="1px" borderColor="purple.100" boxShadow="sm">
+                                            <HStack mb={3} spacing={2}>
+                                                <FiZap color="#6B46C1" />
+                                                <Text fontWeight="900" fontSize="sm" color="purple.800" textTransform="uppercase" letterSpacing="0.5px">
+                                                    Autonomous Optimization
+                                                </Text>
+                                            </HStack>
+                                            
+                                            <Text fontSize="md" fontWeight="800" color="purple.900" mb={4} lineHeight="1.5">
+                                                "{analysis.optimization.summary}"
+                                            </Text>
+
+                                            {analysis.optimization.changes_made && analysis.optimization.changes_made.length > 0 && analysis.optimization.changes_made[0] !== 'none' && (
+                                                <VStack align="stretch" spacing={2.5}>
+                                                    {analysis.optimization.changes_made.map((change, index) => (
+                                                        <HStack key={index} bg="white" p={2.5} borderRadius="xl" borderWidth="1px" borderColor="purple.100">
+                                                            <Circle size="6px" bg="purple.400" />
+                                                            <Text fontSize="xs" fontWeight="800" color="purple.700">
+                                                                {change}
+                                                            </Text>
+                                                        </HStack>
+                                                    ))}
+                                                </VStack>
+                                            )}
+                                        </Box>
+                                    )}
+
+                                    {/* Mindset Insight */}
+                                    {analysis?.insights?.mindset_shift && (
+                                        <Box w="full" p={4} borderRadius="xl" borderLeftWidth="4px" borderLeftColor="teal.400" bg="gray.50">
+                                            <Text fontSize="xs" fontWeight="900" color="teal.700" mb={1} textTransform="uppercase">Key Mindset Shift</Text>
+                                            <Text fontSize="sm" fontWeight="700" color="gray.700" fontStyle="italic">
+                                                {analysis.insights.mindset_shift}
+                                            </Text>
+                                        </Box>
+                                    )}
                                 </VStack>
                                 <Button
                                     colorScheme="teal" borderRadius="xl" fontWeight="800" w="full"
-                                    onClick={() => { setShowAnalysis(false); startNewSession(null) }}
+                                    onClick={() => { setShowAnalysis(false); startNewSession(null); window.location.reload(); }}
                                 >
                                     Start Fresh Conversation
                                 </Button>
                                 <Button
+                                    colorScheme="purple" variant="outline" borderRadius="xl" fontWeight="800" w="full" mt={2}
+                                    onClick={async () => {
+                                        try {
+                                            await fetch(`${API_BASE}/tasks/${USERNAME}/undo-planner`, { method: 'POST' })
+                                            window.location.reload()
+                                        } catch(e) {
+                                            console.error("Undo error", e)
+                                        }
+                                    }}
+                                >
+                                    Undo Schedule Changes
+                                </Button>
+                                <Button
                                     variant="ghost" size="sm" borderRadius="xl" fontWeight="700" color="gray.400"
-                                    onClick={() => setShowAnalysis(false)}
+                                    onClick={() => { setShowAnalysis(false); window.location.reload(); }}
                                 >
                                     Stay here
                                 </Button>
