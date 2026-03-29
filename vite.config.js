@@ -4,7 +4,8 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const chatTarget = (env.VITE_CHAT_SERVER_URL || '').replace(/\/+$/, '')
+  // Default to local serene-backend so /v1/* proxy works when VITE_CHAT_SERVER_URL is unset
+  const chatTarget = (env.VITE_CHAT_SERVER_URL || 'http://localhost:8000').replace(/\/+$/, '')
 
   return {
     plugins: [react()],

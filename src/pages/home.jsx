@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { getUsername } from '../lib/session'
 import { MentalHealthStats } from '../components/MentalHealthStats'
 import {
     Box,
@@ -45,14 +47,45 @@ import {
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts'
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiPlus, FiTrash2, FiEdit2, FiCheckCircle, FiClock, FiMessageSquare, FiTrendingUp, FiSettings, FiActivity, FiSearch, FiSend, FiX, FiCheck, FiLayout, FiAward, FiUser, FiZap, FiPlay, FiSquare } from 'react-icons/fi'
+import { FiPlus, FiTrash2, FiEdit2, FiCheckCircle, FiClock, FiMessageSquare, FiTrendingUp, FiSettings, FiActivity, FiSearch, FiSend, FiX, FiCheck, FiLayout, FiAward, FiUser, FiZap, FiPlay, FiSquare, FiBookOpen } from 'react-icons/fi'
 import { calculateLevel, getXpForNextLevel } from '../utils/lifeEngine'
 import { getOracleResponse } from '../utils/oracleAgent'
 import { requestNotificationPermission, showLocalNotification, playMissionSound, ensureAudioUnlocked } from '../utils/notificationService'
 import { VoiceRecorderButton } from '../components/VoiceRecorderButton'
 import { VoiceMessageBubble } from '../components/VoiceMessageBubble'
+import { OracleStructuredReply } from '../components/OracleStructuredReply'
+import { tryParseOracleReply, plainOracleDisplayText } from '../utils/oracleReply'
 
 const MotionBox = motion(Box)
+
+/** Serene HUD text messages: structured card or plain text (never raw JSON fences). */
+function OracleHudTextBubble({ m }) {
+    const parsed = m.sender === 'oracle' ? tryParseOracleReply(m.text) : null
+    if (m.sender === 'user') {
+        return (
+            <Box maxW="85%" p={4} borderRadius="2xl" bg="green.600" color="white" fontSize="sm" fontWeight="600" boxShadow="sm" borderBottomRadius="none" borderTopRadius="2xl">
+                {m.text}
+            </Box>
+        )
+    }
+    const isStructured = Boolean(parsed)
+    return (
+        <Box
+            maxW="85%"
+            p={isStructured ? 0 : 4}
+            borderRadius={isStructured ? '0' : '2xl'}
+            bg={isStructured ? 'transparent' : 'gray.100'}
+            color="gray.800"
+            fontSize="sm"
+            fontWeight="600"
+            boxShadow={isStructured ? 'none' : 'sm'}
+            borderBottomRadius="2xl"
+            borderTopRadius="2xl"
+        >
+            {parsed ? <OracleStructuredReply data={parsed} /> : plainOracleDisplayText(m.text)}
+        </Box>
+    )
+}
 
 function OracleAvatarLauncher({ onClick }) {
     const ringColor = useColorModeValue('green.400', 'green.300')
@@ -82,7 +115,7 @@ function OracleAvatarLauncher({ onClick }) {
                     p="2px"
                     boxShadow="2xl"
                 >
-                    <Avatar src="/avatar.png" name="Oracle" w="100%" h="100%" />
+                    <Avatar src="/logo.png" name="Serene" w="100%" h="100%" />
                 </Circle>
                 <Circle
                     position="absolute"
@@ -142,9 +175,11 @@ const toServerBase = (raw) => {
 
 const SERVER_BASE = toServerBase(RAW_BASE)
 const API_BASE = `${SERVER_BASE}/api/v1`
-const USERNAME = "incri"
+const USERNAME = getUsername() || "guest"
 
 export function Home({ embedded = false, initialTabIndex = 0 }) {
+    const navigate = useNavigate()
+
     // Persistence Layer (Switched to API)
     const [level, setLevel] = useState(1)
     const [xp, setXp] = useState(0)
@@ -318,12 +353,9 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 // Ensure chronological sort for Focus selection
                 planData.sort((a, b) => a.time.localeCompare(b.time))
 
-                // Split tasks into Core (from life.md Constitution) and Custom (AI/Manual added)
-                const coreFromDB = planData.filter(t => !t.is_custom)
-                const customFromDB = planData.filter(t => t.is_custom)
-
-                setSchedule({ fixed: coreFromDB, flexible: [] })
-                setCustomTasks(customFromDB)
+                // All tasks from the plan — task_source ('default'|'ai'|'custom') drives badges in the UI
+                setSchedule({ fixed: planData, flexible: [] })
+                setCustomTasks([])
 
                 // 5. Get Process Stats
                 const statsRes = await fetch(`${API_BASE}/stats/process/${USERNAME}`)
@@ -414,16 +446,17 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
 
             setMessages(prev => [...prev, { kind: 'text', text: response.message, sender: 'oracle' }])
 
-            // Always refresh after any Oracle reply — tool calls update the DB regardless of the
-            // `action` field value (the Oracle confirms in natural language; action stays "none").
-            try {
+            if (['schedule_task', 'edit_task', 'delete_task'].includes(response.action)) {
                 const planRes = await fetch(`${API_BASE}/daily/${USERNAME}/plan`)
                 const planData = await planRes.json()
                 planData.sort((a, b) => a.time.localeCompare(b.time))
-                setSchedule({ fixed: planData.filter(t => !t.is_custom), flexible: [] })
-                setCustomTasks(planData.filter(t => t.is_custom))
-            } catch (refreshErr) {
-                console.warn('Post-reply task refresh failed:', refreshErr)
+                setSchedule({ fixed: planData, flexible: [] })
+                setCustomTasks([])
+            } else if (response.action === 'add_xp') {
+                const userRes = await fetch(`${API_BASE}/user/${USERNAME}`)
+                const userData = await userRes.json()
+                setXp(userData.xp)
+                setLevel(userData.level)
             }
         } catch (err) {
             console.error("Chat Error:", err)
@@ -608,8 +641,9 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
             // Refresh via Plan endpoint (Heals/Syncs with Oracle)
             const planRes = await fetch(`${API_BASE}/daily/${USERNAME}/plan`)
             const planData = await planRes.json()
-            setCustomTasks(planData.filter(t => t.is_custom))
-            setSchedule({ fixed: planData.filter(t => !t.is_custom), flexible: [] })
+            planData.sort((a, b) => a.time.localeCompare(b.time))
+            setSchedule({ fixed: planData, flexible: [] })
+            setCustomTasks([])
             onTaskClose()
         } catch (err) { console.error('Save Task Error:', err) }
     }
@@ -620,8 +654,9 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
             await fetch(`${API_BASE}/tasks/${USERNAME}/manual/${task.time}`, { method: 'DELETE' })
             const planRes = await fetch(`${API_BASE}/daily/${USERNAME}/plan`)
             const planData = await planRes.json()
-            setCustomTasks(planData.filter(t => t.is_custom))
-            setSchedule({ fixed: planData.filter(t => !t.is_custom), flexible: [] })
+            planData.sort((a, b) => a.time.localeCompare(b.time))
+            setSchedule({ fixed: planData, flexible: [] })
+            setCustomTasks([])
         } catch (err) { console.error("Delete Task Error:", err) }
     }
 
@@ -768,6 +803,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
 	            <Button leftIcon={<FiCheckCircle />} justifyContent="start" variant={tabIndex === 1 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(1)}>Log</Button>
 	            <Button leftIcon={<FiAward />} justifyContent="start" variant={tabIndex === 2 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(2)}>Stats</Button>
 	            <Button leftIcon={<FiUser />} justifyContent="start" variant={tabIndex === 3 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(3)}>Profile</Button>
+	            <Button leftIcon={<FiBookOpen />} justifyContent="start" variant="ghost" colorScheme="teal" onClick={() => navigate('/blog')}>Community Blog</Button>
 	        </VStack>
 
             <Divider />
@@ -804,7 +840,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 <Box position="fixed" inset={0} bg="blackAlpha.800" backdropFilter="blur(10px)" zIndex={1000} display="flex" alignItems="center" justifyContent="center">
                     <VStack spacing={4}>
                         <Circle size="60px" border="4px solid" borderColor="blue.500" borderTopColor="transparent" className="spin-animation" />
-                        <Text color="white" fontWeight="900" letterSpacing="2px">SYNCING WITH ORACLE...</Text>
+                        <Text color="white" fontWeight="900" letterSpacing="2px">SYNCING WITH SERENE...</Text>
                         <Text color="gray.500" fontSize="xs">If this takes too long, check your API_BASE configuration.</Text>
                     </VStack>
                 </Box>
@@ -898,15 +934,21 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                             </AnimatePresence>
 
                                             <VStack align="start" spacing={1} mb={8}>
-                                                <Badge colorScheme={
-                                                    getTaskStatus(activeQuest?.time) === 'completed' ? 'green' :
-                                                        getTaskStatus(activeQuest?.time) === 'executing' ? 'orange' :
-                                                            activeQuest?.is_custom ? 'purple' : 'blue'
-                                                } px={3} borderRadius="md" mb={2}>
-                                                    {getTaskStatus(activeQuest?.time) === 'completed' ? 'MISSION COMPLETE' :
-                                                        getTaskStatus(activeQuest?.time) === 'executing' ? 'IN PROGRESS' :
-                                                            activeQuest?.is_custom ? 'CUSTOM MISSION' : 'ACTIVE MISSION'}
-                                                </Badge>
+                                                {(() => {
+                                                    const aqStatus = getTaskStatus(activeQuest?.time)
+                                                    const aqSrc = activeQuest?.task_source || (activeQuest?.is_custom ? 'custom' : 'default')
+                                                    const scheme = aqStatus === 'completed' ? 'green'
+                                                        : aqStatus === 'executing' ? 'orange'
+                                                        : aqSrc === 'custom' ? 'purple'
+                                                        : aqSrc === 'ai' ? 'teal'
+                                                        : 'blue'
+                                                    const label = aqStatus === 'completed' ? 'MISSION COMPLETE'
+                                                        : aqStatus === 'executing' ? 'IN PROGRESS'
+                                                        : aqSrc === 'custom' ? '✏️ CUSTOM MISSION'
+                                                        : aqSrc === 'ai' ? '🤖 AI MISSION'
+                                                        : '⚡ ACTIVE MISSION'
+                                                    return <Badge colorScheme={scheme} px={3} borderRadius="md" mb={2}>{label}</Badge>
+                                                })()}
                                                 <Heading size="2xl" fontWeight="900" letterSpacing="-1.5px">{activeQuest?.activity || 'Calculating...'}</Heading>
                                                 <HStack spacing={2}>
                                                     <Text color="gray.500" fontWeight="700">Scheduled for {formatTime(activeQuest?.time)}</Text>
@@ -1002,21 +1044,45 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                                     const state = taskStates[task.time]
                                                     const isCompleted = status === 'completed'
                                                     const isExecuting = status === 'executing'
+                                                    const src = task.task_source || (task.is_custom ? 'custom' : 'default')
+                                                    const isCustomTask = src === 'custom'
+                                                    const isAiTask = src === 'ai'
+                                                    // Border colour reflects source
+                                                    const borderCol = isCompleted ? "green.100"
+                                                        : isExecuting ? "orange.100"
+                                                        : isCustomTask ? "purple.100"
+                                                        : isAiTask ? "teal.100"
+                                                        : "gray.50"
+                                                    const circleCol = isCompleted ? "green.500"
+                                                        : isExecuting ? "orange.500"
+                                                        : isCustomTask ? "purple.500"
+                                                        : isAiTask ? "teal.500"
+                                                        : "gray.100"
                                                     return (
                                                         <MotionBox key={`${period}-${i}`} bg={cardBg} p={5} borderRadius="2xl" shadow="sm" border="1px solid"
-                                                            borderColor={isCompleted ? "green.100" : isExecuting ? "orange.100" : task.is_custom ? "purple.100" : "gray.50"}
+                                                            borderColor={borderCol}
                                                             opacity={isCompleted ? 0.7 : 1}
                                                             whileHover={{ x: 3 }}
                                                         >
                                                             <HStack spacing={4}>
-                                                                <Circle size="10"
-                                                                    bg={isCompleted ? "green.500" : isExecuting ? "orange.500" : task.is_custom ? "purple.500" : "gray.100"}
-                                                                    color={isCompleted || isExecuting || task.is_custom ? "white" : "gray.400"}
+                                                                <Circle size="10" bg={circleCol}
+                                                                    color={isCompleted || isExecuting || isCustomTask || isAiTask ? "white" : "gray.400"}
                                                                 >
                                                                     <Icon as={isCompleted ? FiCheckCircle : isExecuting ? FiPlay : FiClock} />
                                                                 </Circle>
                                                                 <VStack align="start" spacing={0} flex={1}>
-                                                                    <Text fontWeight="800" fontSize="lg" textDecoration={isCompleted ? 'line-through' : 'none'}>{task.activity}</Text>
+                                                                    <HStack spacing={1} flexWrap="wrap">
+                                                                        <Text fontWeight="800" fontSize="lg" textDecoration={isCompleted ? 'line-through' : 'none'}>{task.activity}</Text>
+                                                                        {/* Source badge */}
+                                                                        {!isCompleted && !isExecuting && (
+                                                                            <Badge
+                                                                                colorScheme={isCustomTask ? 'purple' : isAiTask ? 'teal' : 'blue'}
+                                                                                fontSize="8px" px={1.5} borderRadius="md"
+                                                                            >
+                                                                                {isCustomTask ? '✏️ CUSTOM' : isAiTask ? '🤖 AI' : '⚡ DEFAULT'}
+                                                                            </Badge>
+                                                                        )}
+                                                                    </HStack>
                                                                     <HStack spacing={2}>
                                                                         <Text fontSize="xs" fontWeight="900" color="gray.400">{formatTime(task.time)}</Text>
                                                                         {isCompleted && state?.xp_earned !== undefined && (
@@ -1035,12 +1101,17 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                                                 </VStack>
                                                                 <HStack flexShrink={0}>
                                                                     <Badge colorScheme={
-                                                                        isCompleted ? 'green' : isExecuting ? 'orange' : task.is_custom ? 'purple' : 'blue'
+                                                                        isCompleted ? 'green' : isExecuting ? 'orange' : isCustomTask ? 'purple' : isAiTask ? 'teal' : 'blue'
                                                                     } fontSize="10px">
                                                                         {isCompleted ? '✅ Done' : isExecuting ? '▶ Running' : `+${task.xp}XP`}
                                                                     </Badge>
-                                                                    <IconButton icon={<FiEdit2 />} size="xs" variant="ghost" onClick={(e) => openEditModal(task, e)} aria-label="Edit" />
-                                                                    <IconButton icon={<FiTrash2 />} size="xs" variant="ghost" colorScheme="red" onClick={(e) => handleDeleteTask(task, e)} aria-label="Delete" />
+                                                                    {/* Only custom tasks can be edited / deleted */}
+                                                                    {isCustomTask && (
+                                                                        <>
+                                                                            <IconButton icon={<FiEdit2 />} size="xs" variant="ghost" onClick={(e) => openEditModal(task, e)} aria-label="Edit" />
+                                                                            <IconButton icon={<FiTrash2 />} size="xs" variant="ghost" colorScheme="red" onClick={(e) => handleDeleteTask(task, e)} aria-label="Delete" />
+                                                                        </>
+                                                                    )}
                                                                 </HStack>
                                                             </HStack>
                                                         </MotionBox>
@@ -1099,7 +1170,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
 	                                <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8}>
 	                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
 	                                        <HStack spacing={4} mb={6}>
-	                                            <Avatar size="lg" src="/avatar.png" name="Life Agent" border="2px solid" borderColor="blue.500" />
+	                                            <Avatar size="lg" src="/logo.png" name="Life Agent" border="2px solid" borderColor="blue.500" />
 	                                            <VStack align="start" spacing={0}>
 	                                                <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
 	                                                <Heading size="md" fontWeight="900">Life Agent</Heading>
@@ -1148,7 +1219,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
 	                                            </Box>
 	                                        </SimpleGrid>
 	                                        <Text fontSize="sm" color="gray.500" fontWeight="700">
-	                                            Your stats evolve automatically from your daily actions. Keep executing missions and let the Oracle calibrate your trajectory.
+	                                            Your stats evolve automatically from your daily actions. Keep executing missions and let Serene calibrate your trajectory.
 	                                        </Text>
 	                                    </Box>
 	                                </SimpleGrid>
@@ -1168,11 +1239,12 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                         <IconButton icon={<FiLayout />} variant={tabIndex === 0 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(0)} aria-label="Home" />
                         <Circle size="12" bg="blue.500" color="white" shadow="lg" transform="translateY(-20px)" cursor="pointer" onClick={() => handleTabChange(0)}><Icon as={FiZap} fontSize="20px" /></Circle>
                         <IconButton icon={<FiAward />} variant={tabIndex === 2 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(2)} aria-label="Stats" />
+                        <IconButton icon={<FiBookOpen />} variant="ghost" colorScheme="teal" onClick={() => navigate('/blog')} aria-label="Community Blog" />
                     </HStack>
                 </Box>
             )}
 
-            {/* Oracle Chat */}
+            {/* Serene Chat */}
             {!embedded && (isMobile ? (
                 <Drawer isOpen={isOracleOpen} placement="bottom" onClose={onOracleClose} isFullHeight={false}>
                     <DrawerOverlay backdropFilter="blur(5px)" bg="blackAlpha.300" />
@@ -1191,7 +1263,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                         <DrawerHeader borderBottomWidth="1px" pt={20} pb={6} bg={cardBg} position="relative" zIndex={200}>
                             <HStack justify="space-between" align="center">
                                 <HStack>
-                                    <Avatar size="sm" src="/avatar.png" name="Oracle" border="2px solid" borderColor="green.300" />
+                                    <Avatar size="sm" src="/logo.png" name="Serene" border="2px solid" borderColor="green.300" />
                                     <Circle size="3" bg="green.400" className="pulse-animation" />
                                     <Heading size="md" fontWeight="900">Serene HUD</Heading>
                                 </HStack>
@@ -1230,7 +1302,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                                 />
                                             </Box>
                                         ) : (
-                                            <Box maxW="85%" p={4} borderRadius="2xl" bg={m.sender === 'user' ? 'green.600' : 'gray.100'} color={m.sender === 'user' ? 'white' : 'gray.800'} fontSize="sm" fontWeight="600" boxShadow="sm" borderBottomRadius={m.sender === 'user' ? 'none' : '2xl'} borderTopRadius="2xl">{m.text}</Box>
+                                            <OracleHudTextBubble m={m} />
                                         )}
                                     </Box>
                                 ))}
@@ -1332,7 +1404,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 >
                     <HStack px={6} py={5} borderBottomWidth="1px" justify="space-between">
                         <HStack>
-                            <Avatar size="sm" src="/avatar.png" name="Oracle" border="2px solid" borderColor="green.300" />
+                            <Avatar size="sm" src="/logo.png" name="Serene" border="2px solid" borderColor="green.300" />
                             <Circle size="3" bg="green.400" className="pulse-animation" />
                             <Heading size="md" fontWeight="900">Serene HUD</Heading>
                         </HStack>
@@ -1370,7 +1442,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                         />
                                     </Box>
                                 ) : (
-                                    <Box maxW="85%" p={4} borderRadius="2xl" bg={m.sender === 'user' ? 'green.600' : 'gray.100'} color={m.sender === 'user' ? 'white' : 'gray.800'} fontSize="sm" fontWeight="600" boxShadow="sm" borderBottomRadius={m.sender === 'user' ? 'none' : '2xl'} borderTopRadius="2xl">{m.text}</Box>
+                                    <OracleHudTextBubble m={m} />
                                 )}
                             </Box>
                         ))}
