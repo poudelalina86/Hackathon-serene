@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { clearUser, getUsername } from '../lib/session'
 import {
     Avatar,
     Badge,
@@ -26,16 +28,17 @@ import {
     VStack,
     useColorModeValue,
 } from '@chakra-ui/react'
-import { FiBarChart2, FiClock, FiMessageSquare, FiSend, FiZap, FiUser, FiSave, FiRefreshCw } from 'react-icons/fi'
+import { FiBarChart2, FiBookOpen, FiClock, FiLogOut, FiMessageSquare, FiSend, FiZap, FiUser, FiSave } from 'react-icons/fi'
 import { VoiceRecorderButton } from '../components/VoiceRecorderButton'
 import { VoiceMessageBubble } from '../components/VoiceMessageBubble'
 import { OracleStructuredReply } from '../components/OracleStructuredReply'
+import { tryParseOracleReply, plainOracleDisplayText } from '../utils/oracleReply'
 import { Home } from './home'
 
 const RAW_BASE =
     import.meta.env["VITE_API_URL"] ||
     import.meta.env["VITE_X_7ea54382_7b12_4f3d_9c3a_1e4d5f6a7b8c"] ||
-    "http://localhost:8010/v1"
+    "http://localhost:8000/api/v1"
 
 const toServerBase = (raw) => {
     const trimmed = String(raw || "").replace(/\/+$/, "")
@@ -47,11 +50,12 @@ const toServerBase = (raw) => {
 
 const SERVER_BASE = toServerBase(RAW_BASE)
 const API_BASE = `${SERVER_BASE}/api/v1`
+/** Same host as serene-backend (OpenAI-style /v1 routes). Always use absolute URLs so dev works without Vite proxy. */
 const CHAT_SERVER_BASE = toServerBase(import.meta.env["VITE_CHAT_SERVER_URL"] || SERVER_BASE)
 const CHAT_COMPLETIONS_URL = `${CHAT_SERVER_BASE}/v1/chat/completions`
 const SESSION_NEW_URL = `${CHAT_SERVER_BASE}/v1/session/new`
 const SESSION_END_URL = `${CHAT_SERVER_BASE}/v1/session/end`
-const USERNAME = "incri"
+const USERNAME = getUsername() || "guest"
 
 const LAST_SESSION_KEY = `serene:lastSession:${USERNAME}`
 const sessionCacheKey = (sessionId) => `serene:sessionCache:${USERNAME}:${sessionId}`
@@ -87,81 +91,8 @@ const getBlobDurationSeconds = (blob) =>
         }
     })
 
-const tryParseJsonReply = (text) => {
-    const raw = String(text || '').trim()
-    if (!raw) return null
-
-    // Strip ```json fences if present
-    const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-    const candidate = (fenced ? fenced[1] : raw).trim()
-    if (!candidate.startsWith('{') || !candidate.endsWith('}')) return null
-    try {
-        const parsed = JSON.parse(candidate)
-        return parsed && typeof parsed === 'object' ? parsed : null
-    } catch {
-        return null
-    }
-}
-
-const extractOraclePayload = (text) => {
-    const raw = String(text || '')
-    const direct = tryParseJsonReply(raw)
-    if (direct) return { message: direct?.message, payload: direct, cleaned: raw }
-
-    // Handle replies that contain a fenced JSON block anywhere in the text.
-    const fenceRe = /```(?:json)?\s*([\s\S]*?)\s*```/gi
-    let match
-    let lastPayload = null
-    let cleaned = raw
-    while ((match = fenceRe.exec(raw)) !== null) {
-        const candidate = String(match[1] || '').trim()
-        if (!candidate.startsWith('{') || !candidate.endsWith('}')) continue
-        try {
-            const parsed = JSON.parse(candidate)
-            if (parsed && typeof parsed === 'object') {
-                lastPayload = parsed
-                // Remove this fenced block from display.
-                cleaned = cleaned.replace(match[0], '').trim()
-            }
-        } catch {
-            // ignore
-        }
-    }
-
-    // If the model started a fenced JSON block but never closed it, hide it from display.
-    const openFenceIdx = cleaned.search(/```(?:json)?/i)
-    if (openFenceIdx !== -1) {
-        cleaned = cleaned.slice(0, openFenceIdx).trim()
-    }
-
-    // Heuristic: sometimes the response includes JSON appended without fences; extract the last {...}.
-    if (!lastPayload) {
-        const start = raw.lastIndexOf('{')
-        const end = raw.lastIndexOf('}')
-        if (start !== -1 && end !== -1 && end > start) {
-            const candidate = raw.slice(start, end + 1).trim()
-            try {
-                const parsed = JSON.parse(candidate)
-                if (parsed && typeof parsed === 'object') {
-                    lastPayload = parsed
-                    cleaned = (raw.slice(0, start) + raw.slice(end + 1)).trim()
-                }
-            } catch {
-                // ignore
-            }
-        }
-    }
-
-    return { message: lastPayload?.message, payload: lastPayload, cleaned }
-}
-
-const normalizeOracleText = (text) => {
-    const { message, cleaned } = extractOraclePayload(text)
-    if (typeof message === 'string' && message.trim()) return message.trim()
-    return String(cleaned || '').trim()
-}
-
 export function Chat() {
+    const navigate = useNavigate()
     const bg = useColorModeValue('gray.50', 'gray.900')
     const cardBg = useColorModeValue('white', 'gray.800')
     const borderColor = useColorModeValue('teal.100', 'whiteAlpha.200')
@@ -583,10 +514,58 @@ export function Chat() {
                     top={0}
                     h="100vh"
                 >
-                    <Box px={6} pt={6} pb={5}>
-                        <HStack
-                            as="button"
-                            type="button"
+                    <HStack
+                        as="button"
+                        type="button"
+                        onClick={() => {
+                            setSidebarView('chat')
+                            setActivePanel(null)
+                        }}
+                        spacing={3}
+                        mb={6}
+                        w="full"
+                        textAlign="left"
+                        _hover={{ opacity: 0.92 }}
+                        _active={{ opacity: 0.85 }}
+                    >
+                        <Avatar size="md" src="/logo.png" name="Serene" />
+                        <VStack align="start" spacing={0}>
+                            <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
+                            <Heading size="sm" fontWeight="900" color="teal.900">Life Agent</Heading>
+                        </VStack>
+                    </HStack>
+
+                    <Box p={4} borderRadius="2xl" bg="teal.50" borderWidth="1px" borderColor="teal.100" mb={4}>
+                        <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={2}>
+                            Process Age
+                        </Text>
+                        <SimpleGrid columns={2} spacing={3}>
+                            <Box>
+                                <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.days}</Text>
+                                <Text fontSize="xs" fontWeight="800" color="teal.600">DAYS</Text>
+                            </Box>
+                            <Box>
+                                <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.weeks}</Text>
+                                <Text fontSize="xs" fontWeight="800" color="teal.600">WEEKS</Text>
+                            </Box>
+                        </SimpleGrid>
+                    </Box>
+
+                    <Box mb={5}>
+                        <Text fontSize="10px" fontWeight="900" color="teal.700" mb={3} textTransform="uppercase">Experience</Text>
+                        <Progress value={Math.min(100, (xp % 1000) / 10)} size="sm" colorScheme="teal" borderRadius="full" />
+                        <Text mt={2} fontSize="xs" color="teal.700" fontWeight="800">{xp} XP</Text>
+                    </Box>
+
+                    <Divider my={5} borderColor="teal.100" />
+
+                    <VStack align="stretch" spacing={2}>
+                        <Button
+                            leftIcon={<FiMessageSquare />}
+                            colorScheme="teal"
+                            variant={sidebarView === 'chat' ? 'solid' : 'ghost'}
+                            borderRadius="xl"
+                            justifyContent="flex-start"
                             onClick={() => {
                                 setSidebarView('chat')
                                 setActivePanel(null)
@@ -598,19 +577,83 @@ export function Chat() {
                             _hover={{ opacity: 0.92 }}
                             _active={{ opacity: 0.85 }}
                         >
-                            <Avatar size="md" src="/avatar.png" name="Serene" />
-                            <VStack align="start" spacing={0}>
-                                <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
-                            <Heading
-                                size="sm"
-                                fontWeight="700"
-                                color="teal.600"
-                                sx={{ fontFamily: 'var(--serene-script)' }}
-                            >
-                                Serene
-                            </Heading>
-                            </VStack>
-                        </HStack>
+                            Chat
+                        </Button>
+                        <Button
+                            leftIcon={<FiZap />}
+                            colorScheme="teal"
+                            variant={sidebarView === 'focus' ? 'solid' : 'ghost'}
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => {
+                                setSidebarView('focus')
+                                setActivePanel('focus')
+                            }}
+                        >
+                            Focus
+                        </Button>
+                        <Button
+                            leftIcon={<FiClock />}
+                            colorScheme="teal"
+                            variant={sidebarView === 'log' ? 'solid' : 'ghost'}
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => {
+                                setSidebarView('log')
+                                setActivePanel('log')
+                            }}
+                        >
+                            Log
+                        </Button>
+                        <Button
+                            leftIcon={<FiBarChart2 />}
+                            colorScheme="teal"
+                            variant={sidebarView === 'stats' ? 'solid' : 'ghost'}
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => {
+                                setSidebarView('stats')
+                                setActivePanel('stats')
+                            }}
+                        >
+                            Stats
+                        </Button>
+                        <Button
+                            leftIcon={<FiUser />}
+                            colorScheme="teal"
+                            variant={sidebarView === 'profile' ? 'solid' : 'ghost'}
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => {
+                                setSidebarView('profile')
+                                setActivePanel('profile')
+                            }}
+                        >
+                            Profile
+                        </Button>
+                        <Button
+                            leftIcon={<FiBookOpen />}
+                            colorScheme="teal"
+                            variant="ghost"
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => navigate('/blog')}
+                        >
+                            Community Blog
+                        </Button>
+                        <Button
+                            leftIcon={<FiLogOut />}
+                            colorScheme="red"
+                            variant="ghost"
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => { clearUser(); navigate('/login'); }}
+                        >
+                            Log Out
+                        </Button>
+                    </VStack>
+
+                    <Divider my={5} borderColor="teal.100" />
 
                         <Box p={4} borderRadius="2xl" bg="teal.50" borderWidth="1px" borderColor="teal.100" mb={4}>
                             <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={2}>
@@ -628,150 +671,19 @@ export function Chat() {
                             </SimpleGrid>
                         </Box>
 
-                        <Box mb={5}>
-                            <Text fontSize="10px" fontWeight="900" color="teal.700" mb={3} textTransform="uppercase">Experience</Text>
-                            <Progress value={Math.min(100, (xp % 1000) / 10)} size="sm" colorScheme="teal" borderRadius="full" />
-                            <Text mt={2} fontSize="xs" color="teal.700" fontWeight="800">{xp} XP</Text>
-                        </Box>
-
-                        <Divider my={5} borderColor="teal.100" />
-
-                        <VStack align="stretch" spacing={2}>
-                            <Button
-                                leftIcon={<FiMessageSquare />}
-                                colorScheme="teal"
-                                variant={sidebarView === 'chat' ? 'solid' : 'ghost'}
-                                borderRadius="xl"
-                                justifyContent="flex-start"
-                                onClick={() => {
-                                    setSidebarView('chat')
-                                    setActivePanel(null)
-                                }}
-                            >
-                                Chat
-                            </Button>
-                            <Button
-                                leftIcon={<FiZap />}
-                                colorScheme="teal"
-                                variant={sidebarView === 'focus' ? 'solid' : 'ghost'}
-                                borderRadius="xl"
-                                justifyContent="flex-start"
-                                onClick={() => {
-                                    setSidebarView('focus')
-                                    setActivePanel('focus')
-                                }}
-                            >
-                                Focus
-                            </Button>
-                            <Button
-                                leftIcon={<FiClock />}
-                                colorScheme="teal"
-                                variant={sidebarView === 'log' ? 'solid' : 'ghost'}
-                                borderRadius="xl"
-                                justifyContent="flex-start"
-                                onClick={() => {
-                                    setSidebarView('log')
-                                    setActivePanel('log')
-                                }}
-                            >
-                                Log
-                            </Button>
-                            <Button
-                                leftIcon={<FiBarChart2 />}
-                                colorScheme="teal"
-                                variant={sidebarView === 'stats' ? 'solid' : 'ghost'}
-                                borderRadius="xl"
-                                justifyContent="flex-start"
-                                onClick={() => {
-                                    setSidebarView('stats')
-                                    setActivePanel('stats')
-                                }}
-                            >
-                                Stats
-                            </Button>
-                            <Button
-                                leftIcon={<FiUser />}
-                                colorScheme="teal"
-                                variant={sidebarView === 'profile' ? 'solid' : 'ghost'}
-                                borderRadius="xl"
-                                justifyContent="flex-start"
-                                onClick={() => {
-                                    setSidebarView('profile')
-                                    setActivePanel('profile')
-                                }}
-                            >
-                                Profile
-                            </Button>
-                        </VStack>
-                    </Box>
-
-                    <Box px={6} pb={6}>
-                        {sidebarView === 'chat' && (
-                            <HStack
-                                justify="space-between"
-                                mb={3}
-                                position="sticky"
-                                top={0}
-                                zIndex={2}
-                                bg={cardBg}
-                                pt={4}
-                                pb={2}
-                            >
-                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase">
-                                    Chats
-                                </Text>
-                                <IconButton
-                                    aria-label="Refresh chats"
-                                    icon={<FiRefreshCw />}
-                                    size="xs"
-                                    variant="ghost"
-                                    colorScheme="teal"
-                                    onClick={fetchSessions}
-                                    isLoading={isSessionsLoading}
-                                />
-                            </HStack>
-                        )}
-
-                        {sidebarView === 'chat' && (() => {
-                            const visibleSessions = sessions.filter(s => Number(s?.message_count ?? 0) > 0)
-                            if (isSessionsLoading && visibleSessions.length === 0) {
-                                return (
-                                    <HStack justify="center" py={4}>
-                                        <Spinner size="sm" />
-                                    </HStack>
-                                )
-                            }
-                            return (
-                                <VStack align="stretch" spacing={1}>
-                                    {visibleSessions.map((s) => {
-                                        const sid = s?.session_id
-                                        const active = sid && sid === conversationId
-                                        return (
-                                            <Button
-                                                key={sid}
-                                                variant={active ? 'solid' : 'ghost'}
-                                                colorScheme="teal"
-                                                borderRadius="xl"
-                                                justifyContent="flex-start"
-                                                onClick={() => loadSession(sid)}
-                                                h="60px"
-                                                px={3}
-                                                whiteSpace="normal"
-                                            >
-                                                <VStack align="start" spacing={0} w="full">
-                                                    <Text fontSize="sm" fontWeight="900" noOfLines={1}>
-                                                        {fmt(s?.started_at)}
-                                                    </Text>
-                                                    <Text fontSize="xs" fontWeight="700" color={muted} noOfLines={1}>
-                                                        {Number(s?.message_count ?? 0)} msgs{s?.ended_at ? '' : ' • active'}
-                                                    </Text>
-                                                </VStack>
-                                            </Button>
-                                        )
-                                    })}
-                                    {visibleSessions.length === 0 && (
-                                        <Text fontSize="sm" color={muted} fontWeight="700" py={2}>
-                                            No chats yet.
+                    {sidebarView === 'log' && (
+                        <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
+                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
+                                Recent
+                            </Text>
+                            <VStack align="stretch" spacing={2}>
+                                {(messages.slice(-5)).reverse().map((m, idx) => (
+                                    <Box key={`${m.id || idx}-log`} p={3} borderRadius="xl" bg="teal.50" borderWidth="1px" borderColor="teal.100">
+                                        <Text fontSize="xs" color="teal.700" fontWeight="900" mb={1} textTransform="uppercase">
+                                            {m.sender === 'user' ? 'You' : 'Serene'}
+                                        </Text>
+                                        <Text fontSize="sm" fontWeight="800" color="teal.900" noOfLines={2}>
+                                            {m.kind === 'voice' ? 'Voice message' : (m.text || '')}
                                         </Text>
                                     )}
                                 </VStack>
@@ -882,22 +794,9 @@ export function Chat() {
                 >
                     <HStack w="full" maxW="980px" mx="auto" justify="space-between">
                         <HStack spacing={3}>
-                            <Avatar size="md" src="/avatar.png" name="Serene" border="2px solid" borderColor="teal.200" />
+                            <Avatar size="md" src="/logo.png" name="Serene" border="2px solid" borderColor="teal.200" />
                             <Circle size="3" bg="teal.400" className="pulse-animation" />
-                            <Heading
-                                size="md"
-                                fontWeight="900"
-                                letterSpacing="-0.2px"
-                                color="teal.600"
-                                sx={{
-                                    fontFamily: 'var(--serene-script)',
-                                    textShadow: '0 1px 0 rgba(255,255,255,0.6)',
-                                    fontSize: '34px',
-                                    lineHeight: '1',
-                                }}
-                            >
-                                Serene
-                            </Heading>
+                            <Heading size="md" fontWeight="900" letterSpacing="-0.3px" color="teal.900">Serene</Heading>
                         </HStack>
                         <HStack spacing={2}>
                             {messages.length > 0 && (
@@ -925,6 +824,26 @@ export function Chat() {
                             >
                                 New Chat
                             </Button>
+                            <IconButton
+                                size="sm"
+                                icon={<FiBookOpen />}
+                                colorScheme="teal"
+                                variant="ghost"
+                                borderRadius="lg"
+                                aria-label="Community Blog"
+                                onClick={() => navigate('/blog')}
+                                display={{ base: 'flex', lg: 'none' }}
+                            />
+                            <IconButton
+                                size="sm"
+                                icon={<FiLogOut />}
+                                colorScheme="red"
+                                variant="ghost"
+                                borderRadius="lg"
+                                aria-label="Log Out"
+                                onClick={() => { clearUser(); navigate('/login'); }}
+                                display={{ base: 'flex', lg: 'none' }}
+                            />
                         </HStack>
                     </HStack>
                 </HStack>
@@ -966,7 +885,7 @@ export function Chat() {
                                         </Box>
                                     ) : (
                                         (() => {
-                                            const parsed = m.sender === 'oracle' ? tryParseJsonReply(m.text) : null
+                                            const parsed = m.sender === 'oracle' ? tryParseOracleReply(m.text) : null
                                             const isStructured = Boolean(parsed)
                                             return (
                                         <Box
@@ -985,7 +904,7 @@ export function Chat() {
                                             borderWidth={isStructured ? '0' : (m.sender === 'user' ? '0' : '1px')}
                                             borderColor={isStructured ? 'transparent' : (m.sender === 'user' ? 'transparent' : glassTealBorder)}
                                         >
-                                            {parsed ? <OracleStructuredReply data={parsed} /> : m.text}
+                                            {parsed ? <OracleStructuredReply data={parsed} /> : plainOracleDisplayText(m.text)}
                                         </Box>
                                             )
                                         })()
@@ -1030,70 +949,26 @@ export function Chat() {
                     <Box w="full" maxW="980px" mx="auto">
                         <form onSubmit={onSubmit}>
                             <InputGroup size="md">
-	                                <Input
-	                                    display={isVoiceRecording ? 'none' : 'block'}
-	                                    pl="1.25rem"
-	                                    pr="8.5rem"
-	                                    py={6}
-	                                    placeholder="Message Serene…"
-	                                    bg="gray.50"
-	                                    border="1px solid"
-	                                    borderColor="gray.100"
-	                                    borderRadius="xl"
-	                                    fontWeight="600"
-	                                    value={inputText}
-	                                    onChange={(e) => setInputText(e.target.value)}
-	                                />
-	                                {isVoiceRecording && (
-	                                    <Box
-	                                        w="full"
-	                                        pl="1.25rem"
-	                                        pr="8.5rem"
-	                                        py={4}
-	                                        bg="gray.50"
-	                                        border="1px solid"
-	                                        borderColor="gray.100"
-	                                        borderRadius="xl"
-	                                        display="flex"
-	                                        alignItems="center"
-	                                        justifyContent="space-between"
-	                                        gap={3}
-	                                        sx={{
-	                                            '.rec-bar': { animation: 'rec-pulse 700ms ease-in-out infinite alternate' },
-	                                            '.rec-bar--2': { animationDelay: '100ms' },
-	                                            '.rec-bar--3': { animationDelay: '220ms' },
-	                                            '.rec-bar--4': { animationDelay: '320ms' },
-	                                            '@keyframes rec-pulse': {
-	                                                '0%': { transform: 'scaleY(0.55)', opacity: 0.65 },
-	                                                '100%': { transform: 'scaleY(1.15)', opacity: 1 },
-	                                            },
-	                                        }}
-	                                    >
-	                                        <Text fontWeight="800" color="teal.700">
-	                                            Listening…
-	                                        </Text>
-	                                        <HStack spacing="2px" align="flex-end" h="18px">
-	                                            <Box w="3px" h="6px" bg="teal.500" borderRadius="999px" className="rec-bar" />
-	                                            <Box w="3px" h="12px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--2" />
-	                                            <Box w="3px" h="9px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--3" />
-	                                            <Box w="3px" h="14px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--4" />
-	                                        </HStack>
-	                                    </Box>
-	                                )}
-	                                <InputRightElement width="8.5rem" h="full" pr={2}>
-	                                    <HStack spacing={2}>
-	                                        <VoiceRecorderButton
-	                                            ref={voiceRecorderRef}
-	                                            size="sm"
-	                                            isDisabled={!conversationId}
-	                                            isPaused={isThinking}
-	                                            autoSendOnSilence
-	                                            silenceMs={3500}
-	                                            minRecordMs={800}
-	                                            volumeThreshold={0.015}
-	                                            onRecordingStateChange={({ isRecording }) => setIsVoiceRecording(Boolean(isRecording))}
-	                                            onRecordingComplete={(payload) => sendVoiceMessage(payload)}
-	                                        />
+                                <Input
+                                    pl="1.25rem"
+                                    pr="8.5rem"
+                                    py={6}
+                                    placeholder="Message Serene…"
+                                    bg="gray.50"
+                                    border="1px solid"
+                                    borderColor="gray.100"
+                                    borderRadius="xl"
+                                    fontWeight="600"
+                                    value={inputText}
+                                    onChange={(e) => setInputText(e.target.value)}
+                                />
+                                <InputRightElement width="8.5rem" h="full" pr={2}>
+                                    <HStack spacing={2}>
+                                        <VoiceRecorderButton
+                                            ref={voiceRecorderRef}
+                                            size="sm"
+                                            onRecordingComplete={(payload) => sendVoiceMessage(payload)}
+                                        />
                                         <IconButton
                                             size="sm"
                                             colorScheme="teal"
