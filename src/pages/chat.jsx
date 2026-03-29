@@ -35,7 +35,7 @@ import { Home } from './home'
 const RAW_BASE =
     import.meta.env["VITE_API_URL"] ||
     import.meta.env["VITE_X_7ea54382_7b12_4f3d_9c3a_1e4d5f6a7b8c"] ||
-    "http://localhost:8000/api/v1"
+    "http://localhost:8010/v1"
 
 const toServerBase = (raw) => {
     const trimmed = String(raw || "").replace(/\/+$/, "")
@@ -161,53 +161,6 @@ const normalizeOracleText = (text) => {
     return String(cleaned || '').trim()
 }
 
-function SereneMark({ size = 40 }) {
-    return (
-        <Circle
-            size={`${size}px`}
-            bgGradient="radial-gradient(circle at 30% 25%, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.10) 26%, rgba(255,255,255,0) 55%), linear-gradient(135deg, #0d9488 0%, #14b8a6 52%, #22d3ee 100%)"
-            boxShadow="0 14px 28px rgba(13,148,136,0.22), 0 10px 18px rgba(34,211,238,0.14)"
-            borderWidth="1px"
-            borderColor="whiteAlpha.800"
-            position="relative"
-            overflow="hidden"
-        >
-            <Circle position="absolute" inset="3px" borderWidth="1px" borderColor="whiteAlpha.500" />
-            <Box position="absolute" inset="0" bgGradient="linear(to-b, whiteAlpha.300, transparent 55%)" opacity={0.55} />
-            <Box
-                as="svg"
-                width={`${Math.round(size * 0.66)}px`}
-                height={`${Math.round(size * 0.66)}px`}
-                viewBox="0 0 64 64"
-                fill="none"
-                aria-hidden="true"
-            >
-                {/* Flowing "S" wave mark (calm/premium) */}
-                <path
-                    d="M44 18c-5-5-14-6-20-2-4 3-3 8 2 10l8 3c9 3 8 13-1 16-7 3-16 1-21-4"
-                    stroke="rgba(255,255,255,0.94)"
-                    strokeWidth="5.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                />
-                <path
-                    d="M44 18c-5-5-14-6-20-2-4 3-3 8 2 10l8 3c9 3 8 13-1 16-7 3-16 1-21-4"
-                    stroke="rgba(255,255,255,0.35)"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                />
-                {/* small sparkle */}
-                <path
-                    d="M48 28l2 4 4 2-4 2-2 4-2-4-4-2 4-2 2-4Z"
-                    fill="rgba(255,255,255,0.9)"
-                    opacity="0.9"
-                />
-            </Box>
-        </Circle>
-    )
-}
-
 export function Chat() {
     const bg = useColorModeValue('gray.50', 'gray.900')
     const cardBg = useColorModeValue('white', 'gray.800')
@@ -232,6 +185,10 @@ export function Chat() {
     const [inputText, setInputText] = useState("")
     const [isThinking, setIsThinking] = useState(false)
     const [isVoiceRecording, setIsVoiceRecording] = useState(false)
+
+    // Live task state for schedule-change detection
+    const [tasks, setTasks] = useState([])
+    const tasksSnapshotRef = useRef(null)
 
     const [sessions, setSessions] = useState([])
     const [isSessionsLoading, setIsSessionsLoading] = useState(false)
@@ -334,7 +291,7 @@ export function Chat() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ conversation_id: endCurrentId }),
-            }).catch(() => {})
+            }).catch(() => { })
         }
         try {
             const res = await fetch(SESSION_NEW_URL, { method: 'POST' })
@@ -346,25 +303,6 @@ export function Chat() {
             fetchSessions()
         } catch (e) {
             console.warn('Failed to start new session:', e)
-        }
-    }
-
-    const ensureConversationId = async () => {
-        if (conversationIdRef.current) return conversationIdRef.current
-        try {
-            const res = await fetch(SESSION_NEW_URL, { method: 'POST' })
-            if (!res.ok) throw new Error(`HTTP ${res.status}`)
-            const data = await res.json().catch(() => ({}))
-            const cid = data?.conversation_id
-            if (!cid) throw new Error('Missing conversation_id')
-            conversationIdRef.current = cid
-            setConversationId(cid)
-            try { localStorage.setItem(LAST_SESSION_KEY, cid) } catch { /* ignore */ }
-            fetchSessions()
-            return cid
-        } catch (e) {
-            console.warn('Failed to ensure conversation:', e)
-            return null
         }
     }
 
@@ -380,8 +318,14 @@ export function Chat() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ conversation_id: sid }),
             })
-            await fetch(`${API_BASE}/sessions/${USERNAME}/${sid}/analyze`, { method: 'POST' })
-            setAnalysis({ saved: true })
+            const analyzeRes = await fetch(`${API_BASE}/sessions/${USERNAME}/${sid}/analyze`, { method: 'POST' });
+            const analyzeData = await analyzeRes.json();
+            // Save the data to React state so the modal can read it!
+            setAnalysis({
+                saved: true,
+                insights: analyzeData.analysis,
+                optimization: analyzeData.schedule_optimization
+            });
         } catch (e) {
             setAnalysis({ saved: true }) // still show success — data may have saved partially
         } finally {
@@ -441,116 +385,69 @@ export function Chat() {
         restoreOrStartSession()
     }, [])
 
+    // Fetch the task list and detect schedule changes after every Oracle reply
+    const refreshTasksAndDetectChange = async () => {
+        try {
+            const res = await fetch(`${API_BASE}/tasks/${USERNAME}`)
+            if (!res.ok) return
+            const freshTasks = await res.json()
+            const freshKeys = JSON.stringify(
+                (Array.isArray(freshTasks) ? freshTasks : []).map(t => `${t.time}:${t.activity}`).sort()
+            )
+            setTasks(Array.isArray(freshTasks) ? freshTasks : [])
+
+            if (tasksSnapshotRef.current !== null && tasksSnapshotRef.current !== freshKeys) {
+                // Schedule changed — inject a system notice into the chat
+                setMessages(prev => [
+                    ...prev,
+                    {
+                        id: `schedule-update-${Date.now()}`,
+                        kind: 'text',
+                        text: '🗓 Schedule Updated',
+                        sender: 'system',
+                    },
+                ])
+            }
+            tasksSnapshotRef.current = freshKeys
+        } catch (e) {
+            console.warn('Task refresh failed:', e)
+        }
+    }
+
     const sendMessageText = async (text) => {
         const userMsg = (text || '').trim()
         if (!userMsg) return
-
-        await ensureConversationId()
 
         const oracleMsgId = `${Date.now()}-oracle-${Math.random().toString(16).slice(2)}`
         setMessages(prev => [...prev, { kind: 'text', text: userMsg, sender: 'user' }])
         setIsThinking(true)
         try {
-            const res = await fetch(CHAT_COMPLETIONS_URL, {
+            // Use the structured chat endpoint that runs the full tool-execution loop
+            const res = await fetch(`${API_BASE}/chat/${USERNAME}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    messages: [{ role: 'user', content: userMsg }],
+                    user_input: userMsg,
                     conversation_id: conversationIdRef.current,
-                    stream: false,
                 })
             })
-            const contentType = (res.headers.get('content-type') || '').toLowerCase()
+
             if (!res.ok) {
-                let detail = ''
-                if (contentType.includes('application/json')) {
-                    const errJson = await res.json().catch(() => null)
-                    detail = errJson?.detail || errJson?.error?.message || ''
-                } else {
-                    detail = await res.text().catch(() => '')
-                }
-                throw new Error(detail || `HTTP ${res.status}`)
+                const errJson = await res.json().catch(() => null)
+                const detail = errJson?.detail || `HTTP ${res.status}`
+                throw new Error(detail)
             }
 
-            const extractOracleTextFromJson = (json) => {
-                if (!json) return ''
-                return (
-                    json?.choices?.[0]?.message?.content ||
-                    json?.choices?.[0]?.delta?.content ||
-                    json?.choices?.[0]?.text ||
-                    json?.message ||
-                    json?.oracle_response ||
-                    json?.response ||
-                    json?.content ||
-                    ''
-                )
-            }
+            const response = await res.json().catch(() => ({}))
+            // The /api/v1/chat endpoint always returns a ChatResponse with a `message` field.
+            const oracleText = response?.message || response?.oracle_response || response?.content || '(No response)'
+            setMessages(prev => [
+                ...prev,
+                { id: oracleMsgId, kind: 'text', text: String(oracleText).trim() || '(No response)', sender: 'oracle' },
+            ])
 
-            // Some backends return SSE even when stream=false; handle both.
-            if (contentType.includes('text/event-stream')) {
-                let acc = ''
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: '', sender: 'oracle' }])
-
-                const reader = res.body?.getReader?.()
-                if (!reader) throw new Error('Streaming response has no reader')
-
-                const decoder = new TextDecoder('utf-8')
-                let buffer = ''
-                while (true) {
-                    const { value, done } = await reader.read()
-                    if (done) break
-
-                    buffer += decoder.decode(value, { stream: true })
-                    const parts = buffer.split('\n\n')
-                    buffer = parts.pop() || ''
-
-                    for (const part of parts) {
-                        const lines = part.split('\n').map(l => l.trim()).filter(Boolean)
-                        for (const line of lines) {
-                            if (!line.startsWith('data:')) continue
-                            const payload = line.slice(5).trim()
-                            if (!payload || payload === '[DONE]') continue
-                            try {
-                                const evt = JSON.parse(payload)
-                                const delta =
-                                    evt?.choices?.[0]?.delta?.content ||
-                                    evt?.choices?.[0]?.message?.content ||
-                                    evt?.content ||
-                                    ''
-                                if (delta) {
-                                    acc += delta
-                                    setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: acc } : m)))
-                                }
-                            } catch {
-                                // ignore malformed chunks
-                            }
-                        }
-                    }
-                }
-
-                if (!acc.trim()) {
-                    setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: '(No response)' } : m)))
-                } else {
-                    const finalText = normalizeOracleText(acc)
-                    if (finalText !== acc) {
-                        setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: finalText } : m)))
-                    }
-                }
-            } else if (contentType.includes('application/json')) {
-                const response = await res.json().catch(() => ({}))
-                const oracleText = extractOracleTextFromJson(response)
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText(oracleText || '(No response)'), sender: 'oracle' }])
-            } else {
-                const raw = await res.text().catch(() => '')
-                let oracleText = raw
-                try {
-                    const maybeJson = JSON.parse(raw)
-                    oracleText = extractOracleTextFromJson(maybeJson) || raw
-                } catch {
-                    // keep raw
-                }
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText((oracleText || '').trim() || '(No response)'), sender: 'oracle' }])
-            }
+            // Always refresh tasks after every reply — Serene may have called a tool
+            await refreshTasksAndDetectChange()
         } catch (e) {
             console.error('Chat error:', e)
             const msg = e?.message ? String(e.message) : 'Failed to get a reply.'
@@ -562,9 +459,6 @@ export function Chat() {
 
     const sendVoiceMessage = async ({ blob }) => {
         if (isThinking) return
-
-        await ensureConversationId()
-
         const tempId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
         const localUrl = URL.createObjectURL(blob)
         const durationSeconds = await getBlobDurationSeconds(blob)
@@ -661,25 +555,25 @@ export function Chat() {
                             onClick={() => {
                                 setSidebarView('chat')
                                 setActivePanel(null)
-                        }}
-                        spacing={3}
-                        mb={6}
-                        w="full"
-                        textAlign="left"
-                        _hover={{ opacity: 0.92 }}
-                        _active={{ opacity: 0.85 }}
-                    >
-                        <SereneMark size={44} />
-                        <VStack align="start" spacing={0}>
-                            <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
-                            <Heading
-                                size="sm"
-                                fontWeight="700"
-                                color="teal.600"
-                                sx={{ fontFamily: 'var(--serene-script)' }}
-                            >
-                                Serene
-                            </Heading>
+                            }}
+                            spacing={3}
+                            mb={6}
+                            w="full"
+                            textAlign="left"
+                            _hover={{ opacity: 0.92 }}
+                            _active={{ opacity: 0.85 }}
+                        >
+                            <Avatar size="md" src="/avatar.png" name="Serene" />
+                            <VStack align="start" spacing={0}>
+                                <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
+                                <Heading
+                                    size="sm"
+                                    fontWeight="700"
+                                    color="teal.600"
+                                    sx={{ fontFamily: 'var(--serene-script)' }}
+                                >
+                                    Serene
+                                </Heading>
                             </VStack>
                         </HStack>
 
@@ -939,250 +833,271 @@ export function Chat() {
                         </Box>
                     ) : (
                         <>
-                <HStack
-                    position="sticky"
-                    top={0}
-                    zIndex={10}
-                    px={{ base: 3, lg: 4 }}
-                    py={{ base: 2, lg: 3 }}
-                    bg={useColorModeValue('rgba(255,255,255,0.80)', 'rgba(26,32,44,0.72)')}
-                    backdropFilter="blur(12px)"
-                    borderBottomWidth="1px"
-                    borderBottomColor={borderColor}
-                    justify="space-between"
-                >
-	                    <HStack w="full" maxW="980px" mx="auto" justify="space-between">
-	                        <HStack spacing={3}>
-	                            <SereneMark size={44} />
-	                            <Circle size="3" bg="teal.400" className="pulse-animation" />
-	                            <Heading
-	                                size="md"
-	                                fontWeight="900"
-                                letterSpacing="-0.2px"
-                                color="teal.600"
-                                sx={{
-                                    fontFamily: 'var(--serene-script)',
-                                    textShadow: '0 1px 0 rgba(255,255,255,0.6)',
-                                    fontSize: '34px',
-                                    lineHeight: '1',
-                                }}
+                            <HStack
+                                position="sticky"
+                                top={0}
+                                zIndex={10}
+                                px={{ base: 3, lg: 4 }}
+                                py={{ base: 2, lg: 3 }}
+                                bg={useColorModeValue('rgba(255,255,255,0.80)', 'rgba(26,32,44,0.72)')}
+                                backdropFilter="blur(12px)"
+                                borderBottomWidth="1px"
+                                borderBottomColor={borderColor}
+                                justify="space-between"
                             >
-                                Serene
-                            </Heading>
-                        </HStack>
-                        <HStack spacing={2}>
-                            {messages.length > 0 && (
-                                <Button
-                                    size="sm"
-                                    variant="solid"
-                                    colorScheme="purple"
-                                    borderRadius="lg"
-                                    fontWeight="700"
-                                    leftIcon={<FiSave />}
-                                    onClick={endAndAnalyze}
-                                    isLoading={isAnalyzing}
-                                    loadingText="Analyzing…"
-                                >
-                                    End Convo
-                                </Button>
-                            )}
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                colorScheme="teal"
-                                borderRadius="lg"
-                                fontWeight="700"
-                                onClick={() => startNewSession(conversationId)}
-                            >
-                                New Chat
-                            </Button>
-                        </HStack>
-                    </HStack>
-                </HStack>
-
-                <Box flex={1} position="relative" zIndex={1} overflowY="auto" px={{ base: 4, lg: 8 }} py={6}>
-                    {showEmpty ? (
-                        <VStack mt={{ base: 28, lg: 44 }} spacing={3} align="center" textAlign="center">
-                            <Heading size="2xl" fontWeight="900" letterSpacing="-1px">
-                                What can I help with?
-                            </Heading>
-                            <Text color="teal.700" fontWeight="800">
-                                Send a message or a voice note to start.
-                            </Text>
-                        </VStack>
-                    ) : (
-                        <VStack spacing={4} align="stretch">
-                            {messages.map((m, i) => (
-                                <Box key={m.id || i} display="flex" justifyContent={m.sender === 'user' ? 'flex-end' : 'flex-start'}>
-                                    {m.kind === 'voice' ? (
-                                        <Box
-                                            maxW={{ base: "92%", lg: "70%" }}
-                                            p={4}
-                                            borderRadius="2xl"
-                                            bg={glassBg}
-                                            backdropFilter="blur(10px)"
-                                            color={glassVoiceText}
-                                            boxShadow="sm"
-                                            borderBottomRadius={m.sender === 'user' ? 'none' : '2xl'}
-                                            borderTopRadius="2xl"
-                                            minW={{ base: "240px", lg: "320px" }}
-                                            borderWidth="1px"
-                                            borderColor={glassBorder}
+                                <HStack w="full" maxW="980px" mx="auto" justify="space-between">
+                                    <HStack spacing={3}>
+                                        <Avatar size="md" src="/avatar.png" name="Serene" border="2px solid" borderColor="teal.200" />
+                                        <Circle size="3" bg="teal.400" className="pulse-animation" />
+                                        <Heading
+                                            size="md"
+                                            fontWeight="900"
+                                            letterSpacing="-0.2px"
+                                            color="teal.600"
+                                            sx={{
+                                                fontFamily: 'var(--serene-script)',
+                                                textShadow: '0 1px 0 rgba(255,255,255,0.6)',
+                                                fontSize: '34px',
+                                                lineHeight: '1',
+                                            }}
                                         >
-                                            <VoiceMessageBubble
-                                                audioUrl={m.audioUrl}
-                                                durationSeconds={m.durationSeconds}
-                                                isMine={m.sender === 'user'}
-                                            />
-                                        </Box>
-                                    ) : (
-                                        (() => {
-                                            const parsed = m.sender === 'oracle' ? tryParseJsonReply(m.text) : null
-                                            const isStructured = Boolean(parsed)
-                                            return (
-                                        <Box
-                                            maxW={{ base: "92%", lg: "70%" }}
-                                            p={isStructured ? 0 : 4}
-                                            borderRadius={isStructured ? '0' : '2xl'}
-                                            bg={isStructured ? 'transparent' : (m.sender === 'user' ? 'teal.600' : glassBg)}
-                                            backdropFilter={isStructured ? 'none' : (m.sender === 'user' ? 'none' : 'blur(10px)')}
-                                            color={m.sender === 'user' ? 'white' : glassText}
-                                            fontSize="sm"
-                                            fontWeight="600"
-                                            boxShadow={isStructured ? 'none' : 'sm'}
-                                            borderBottomRadius={m.sender === 'user' ? 'none' : '2xl'}
-                                            borderTopRadius="2xl"
-                                            whiteSpace="pre-wrap"
-                                            borderWidth={isStructured ? '0' : (m.sender === 'user' ? '0' : '1px')}
-                                            borderColor={isStructured ? 'transparent' : (m.sender === 'user' ? 'transparent' : glassTealBorder)}
-                                        >
-                                            {parsed ? <OracleStructuredReply data={parsed} /> : m.text}
-                                        </Box>
-                                            )
-                                        })()
-                                    )}
-                                </Box>
-                            ))}
-
-                            {isThinking && (
-                                <HStack
-                                    spacing={2}
-                                    p={4}
-                                    bg={glassBg}
-                                    backdropFilter="blur(10px)"
-                                    borderWidth="1px"
-                                    borderColor={glassTealBorder}
-                                    borderRadius="2xl"
-                                    w="fit-content"
-                                    alignSelf="flex-start"
-                                >
-                                    <Circle size="2" bg="teal.500" opacity={0.4} />
-                                    <Circle size="2" bg="teal.500" opacity={0.6} />
-                                    <Circle size="2" bg="teal.500" opacity={0.8} />
-                                </HStack>
-                            )}
-
-                            <div ref={chatEndRef} />
-                        </VStack>
-                    )}
-                </Box>
-
-                <Box
-                    position="sticky"
-                    bottom={0}
-                    zIndex={20}
-                    px={{ base: 3, lg: 4 }}
-                    py={{ base: 2, lg: 3 }}
-                    bg={useColorModeValue('rgba(255,255,255,0.86)', 'rgba(26,32,44,0.72)')}
-                    backdropFilter="blur(12px)"
-                    borderTopWidth="1px"
-                    borderTopColor={borderColor}
-                >
-                    <Box w="full" maxW="980px" mx="auto">
-                        <form onSubmit={onSubmit}>
-                            <InputGroup size="md">
-	                                <Input
-	                                    display={isVoiceRecording ? 'none' : 'block'}
-	                                    pl="1.25rem"
-	                                    pr="8.5rem"
-	                                    py={6}
-	                                    placeholder="Message Serene…"
-	                                    bg="gray.50"
-	                                    border="1px solid"
-	                                    borderColor="gray.100"
-	                                    borderRadius="xl"
-	                                    fontWeight="600"
-	                                    value={inputText}
-	                                    onChange={(e) => setInputText(e.target.value)}
-	                                />
-	                                {isVoiceRecording && (
-	                                    <Box
-	                                        w="full"
-	                                        pl="1.25rem"
-	                                        pr="8.5rem"
-	                                        py={4}
-	                                        bg="gray.50"
-	                                        border="1px solid"
-	                                        borderColor="gray.100"
-	                                        borderRadius="xl"
-	                                        display="flex"
-	                                        alignItems="center"
-	                                        justifyContent="space-between"
-	                                        gap={3}
-	                                        sx={{
-	                                            '.rec-bar': { animation: 'rec-pulse 700ms ease-in-out infinite alternate' },
-	                                            '.rec-bar--2': { animationDelay: '100ms' },
-	                                            '.rec-bar--3': { animationDelay: '220ms' },
-	                                            '.rec-bar--4': { animationDelay: '320ms' },
-	                                            '@keyframes rec-pulse': {
-	                                                '0%': { transform: 'scaleY(0.55)', opacity: 0.65 },
-	                                                '100%': { transform: 'scaleY(1.15)', opacity: 1 },
-	                                            },
-	                                        }}
-	                                    >
-	                                        <Text fontWeight="800" color="teal.700">
-	                                            Listening…
-	                                        </Text>
-	                                        <HStack spacing="2px" align="flex-end" h="18px">
-	                                            <Box w="3px" h="6px" bg="teal.500" borderRadius="999px" className="rec-bar" />
-	                                            <Box w="3px" h="12px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--2" />
-	                                            <Box w="3px" h="9px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--3" />
-	                                            <Box w="3px" h="14px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--4" />
-	                                        </HStack>
-	                                    </Box>
-	                                )}
-	                                <InputRightElement width="8.5rem" h="full" pr={2}>
-	                                    <HStack spacing={2}>
-	                                        <VoiceRecorderButton
-	                                            ref={voiceRecorderRef}
-	                                            size="sm"
-	                                            isDisabled={isThinking}
-	                                            isPaused={isThinking}
-	                                            autoSendOnSilence
-	                                            silenceMs={3500}
-	                                            minRecordMs={650}
-	                                            volumeThreshold={0.008}
-	                                            onRecordingStateChange={({ isRecording }) => setIsVoiceRecording(Boolean(isRecording))}
-	                                            onRecordingComplete={(payload) => sendVoiceMessage(payload)}
-	                                        />
-                                        <IconButton
-                                            size="sm"
-                                            colorScheme="teal"
-                                            icon={<FiSend />}
-                                            type="submit"
-                                            borderRadius="lg"
-                                            aria-label="Send"
-                                            isDisabled={!conversationId || isThinking}
-                                        />
+                                            Serene
+                                        </Heading>
                                     </HStack>
-                                </InputRightElement>
-                            </InputGroup>
-	                        </form>
-	                    </Box>
-	                </Box>
+                                    <HStack spacing={2}>
+                                        {messages.length > 0 && (
+                                            <Button
+                                                size="sm"
+                                                variant="solid"
+                                                colorScheme="purple"
+                                                borderRadius="lg"
+                                                fontWeight="700"
+                                                leftIcon={<FiSave />}
+                                                onClick={endAndAnalyze}
+                                                isLoading={isAnalyzing}
+                                                loadingText="Analyzing…"
+                                            >
+                                                End Convo
+                                            </Button>
+                                        )}
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            colorScheme="teal"
+                                            borderRadius="lg"
+                                            fontWeight="700"
+                                            onClick={() => startNewSession(conversationId)}
+                                        >
+                                            New Chat
+                                        </Button>
+                                    </HStack>
+                                </HStack>
+                            </HStack>
+
+                            <Box flex={1} position="relative" zIndex={1} overflowY="auto" px={{ base: 4, lg: 8 }} py={6}>
+                                {showEmpty ? (
+                                    <VStack mt={{ base: 28, lg: 44 }} spacing={3} align="center" textAlign="center">
+                                        <Heading size="2xl" fontWeight="900" letterSpacing="-1px">
+                                            What can I help with?
+                                        </Heading>
+                                        <Text color="teal.700" fontWeight="800">
+                                            Send a message or a voice note to start.
+                                        </Text>
+                                    </VStack>
+                                ) : (
+                                    <VStack spacing={4} align="stretch">
+                                        {messages.map((m, i) => {
+                                            if (m.sender === 'system') {
+                                                return (
+                                                    <Box key={m.id || i} display="flex" justifyContent="center" my={2}>
+                                                        <Badge
+                                                            colorScheme="teal"
+                                                            variant="subtle"
+                                                            px={3}
+                                                            py={1}
+                                                            borderRadius="full"
+                                                            textTransform="none"
+                                                            fontSize="xs"
+                                                            fontWeight="800"
+                                                        >
+                                                            {m.text}
+                                                        </Badge>
+                                                    </Box>
+                                                )
+                                            }
+
+                                            return (
+                                                <Box key={m.id || i} display="flex" justifyContent={m.sender === 'user' ? 'flex-end' : 'flex-start'}>
+                                                    {m.kind === 'voice' ? (
+                                                        <Box
+                                                            maxW={{ base: "92%", lg: "70%" }}
+                                                            p={4}
+                                                            borderRadius="2xl"
+                                                            bg={glassBg}
+                                                            backdropFilter="blur(10px)"
+                                                            color={glassVoiceText}
+                                                            boxShadow="sm"
+                                                            borderBottomRadius={m.sender === 'user' ? 'none' : '2xl'}
+                                                            borderTopRadius="2xl"
+                                                            minW={{ base: "240px", lg: "320px" }}
+                                                            borderWidth="1px"
+                                                            borderColor={glassBorder}
+                                                        >
+                                                            <VoiceMessageBubble
+                                                                audioUrl={m.audioUrl}
+                                                                durationSeconds={m.durationSeconds}
+                                                                isMine={m.sender === 'user'}
+                                                            />
+                                                        </Box>
+                                                    ) : (
+                                                        (() => {
+                                                            const parsed = m.sender === 'oracle' ? tryParseJsonReply(m.text) : null
+                                                            const isStructured = Boolean(parsed)
+                                                            return (
+                                                                <Box
+                                                                    maxW={{ base: "92%", lg: "70%" }}
+                                                                    p={isStructured ? 0 : 4}
+                                                                    borderRadius={isStructured ? '0' : '2xl'}
+                                                                    bg={isStructured ? 'transparent' : (m.sender === 'user' ? 'teal.600' : glassBg)}
+                                                                    backdropFilter={isStructured ? 'none' : (m.sender === 'user' ? 'none' : 'blur(10px)')}
+                                                                    color={m.sender === 'user' ? 'white' : glassText}
+                                                                    fontSize="sm"
+                                                                    fontWeight="600"
+                                                                    boxShadow={isStructured ? 'none' : 'sm'}
+                                                                    borderBottomRadius={m.sender === 'user' ? 'none' : '2xl'}
+                                                                    borderTopRadius="2xl"
+                                                                    whiteSpace="pre-wrap"
+                                                                    borderWidth={isStructured ? '0' : (m.sender === 'user' ? '0' : '1px')}
+                                                                    borderColor={isStructured ? 'transparent' : (m.sender === 'user' ? 'transparent' : glassTealBorder)}
+                                                                >
+                                                                    {parsed ? <OracleStructuredReply data={parsed} /> : m.text}
+                                                                </Box>
+                                                            )
+                                                        })()
+                                                    )}
+                                                </Box>
+                                            )
+                                        })}
+
+                                        {isThinking && (
+                                            <HStack
+                                                spacing={2}
+                                                p={4}
+                                                bg={glassBg}
+                                                backdropFilter="blur(10px)"
+                                                borderWidth="1px"
+                                                borderColor={glassTealBorder}
+                                                borderRadius="2xl"
+                                                w="fit-content"
+                                                alignSelf="flex-start"
+                                            >
+                                                <Circle size="2" bg="teal.500" opacity={0.4} />
+                                                <Circle size="2" bg="teal.500" opacity={0.6} />
+                                                <Circle size="2" bg="teal.500" opacity={0.8} />
+                                            </HStack>
+                                        )}
+
+                                        <div ref={chatEndRef} />
+                                    </VStack>
+                                )}
+                            </Box>
+
+                            <Box
+                                position="sticky"
+                                bottom={0}
+                                zIndex={20}
+                                px={{ base: 3, lg: 4 }}
+                                py={{ base: 2, lg: 3 }}
+                                bg={useColorModeValue('rgba(255,255,255,0.86)', 'rgba(26,32,44,0.72)')}
+                                backdropFilter="blur(12px)"
+                                borderTopWidth="1px"
+                                borderTopColor={borderColor}
+                            >
+                                <Box w="full" maxW="980px" mx="auto">
+                                    <form onSubmit={onSubmit}>
+                                        <InputGroup size="md">
+                                            <Input
+                                                display={isVoiceRecording ? 'none' : 'block'}
+                                                pl="1.25rem"
+                                                pr="8.5rem"
+                                                py={6}
+                                                placeholder="Message Serene…"
+                                                bg="gray.50"
+                                                border="1px solid"
+                                                borderColor="gray.100"
+                                                borderRadius="xl"
+                                                fontWeight="600"
+                                                value={inputText}
+                                                onChange={(e) => setInputText(e.target.value)}
+                                            />
+                                            {isVoiceRecording && (
+                                                <Box
+                                                    w="full"
+                                                    pl="1.25rem"
+                                                    pr="8.5rem"
+                                                    py={4}
+                                                    bg="gray.50"
+                                                    border="1px solid"
+                                                    borderColor="gray.100"
+                                                    borderRadius="xl"
+                                                    display="flex"
+                                                    alignItems="center"
+                                                    justifyContent="space-between"
+                                                    gap={3}
+                                                    sx={{
+                                                        '.rec-bar': { animation: 'rec-pulse 700ms ease-in-out infinite alternate' },
+                                                        '.rec-bar--2': { animationDelay: '100ms' },
+                                                        '.rec-bar--3': { animationDelay: '220ms' },
+                                                        '.rec-bar--4': { animationDelay: '320ms' },
+                                                        '@keyframes rec-pulse': {
+                                                            '0%': { transform: 'scaleY(0.55)', opacity: 0.65 },
+                                                            '100%': { transform: 'scaleY(1.15)', opacity: 1 },
+                                                        },
+                                                    }}
+                                                >
+                                                    <Text fontWeight="800" color="teal.700">
+                                                        Listening…
+                                                    </Text>
+                                                    <HStack spacing="2px" align="flex-end" h="18px">
+                                                        <Box w="3px" h="6px" bg="teal.500" borderRadius="999px" className="rec-bar" />
+                                                        <Box w="3px" h="12px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--2" />
+                                                        <Box w="3px" h="9px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--3" />
+                                                        <Box w="3px" h="14px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--4" />
+                                                    </HStack>
+                                                </Box>
+                                            )}
+                                            <InputRightElement width="8.5rem" h="full" pr={2}>
+                                                <HStack spacing={2}>
+                                                    <VoiceRecorderButton
+                                                        ref={voiceRecorderRef}
+                                                        size="sm"
+                                                        isDisabled={!conversationId}
+                                                        isPaused={isThinking}
+                                                        autoSendOnSilence
+                                                        silenceMs={3500}
+                                                        minRecordMs={800}
+                                                        volumeThreshold={0.015}
+                                                        onRecordingStateChange={({ isRecording }) => setIsVoiceRecording(Boolean(isRecording))}
+                                                        onRecordingComplete={(payload) => sendVoiceMessage(payload)}
+                                                    />
+                                                    <IconButton
+                                                        size="sm"
+                                                        colorScheme="teal"
+                                                        icon={<FiSend />}
+                                                        type="submit"
+                                                        borderRadius="lg"
+                                                        aria-label="Send"
+                                                        isDisabled={!conversationId || isThinking}
+                                                    />
+                                                </HStack>
+                                            </InputRightElement>
+                                        </InputGroup>
+                                    </form>
+                                </Box>
+                            </Box>
                         </>
                     )}
-            </Box>
+                </Box>
             </Box>
 
             {/* ── Conversation Analysis Modal ── */}
@@ -1207,21 +1122,57 @@ export function Chat() {
                                 <Circle size="16" bg="green.50" borderWidth="2px" borderColor="green.200">
                                     <Text fontSize="3xl">✓</Text>
                                 </Circle>
-                                <VStack spacing={1}>
-                                    <Text fontWeight="900" fontSize="lg" color="green.700">Conversation Saved</Text>
-                                    <Text fontSize="sm" color="gray.400" fontWeight="600" textAlign="center">
-                                        Your session has been stored. View insights in the Stats tab.
-                                    </Text>
+                                <VStack spacing={3} w="full">
+                                    <Text fontWeight="900" fontSize="lg" color="green.700">Reflections Captured</Text>
+
+                                    {/* Optimization Summary */}
+                                    {analysis?.optimization && (
+                                        <Box w="full" bg="purple.50" p={5} borderRadius="2xl" borderWidth="1px" borderColor="purple.100" boxShadow="sm">
+                                            <HStack mb={3} spacing={2}>
+                                                <FiZap color="#6B46C1" />
+                                                <Text fontWeight="900" fontSize="sm" color="purple.800" textTransform="uppercase" letterSpacing="0.5px">
+                                                    Autonomous Optimization
+                                                </Text>
+                                            </HStack>
+
+                                            <Text fontSize="md" fontWeight="800" color="purple.900" mb={4} lineHeight="1.5">
+                                                "{analysis.optimization.summary}"
+                                            </Text>
+
+                                            {analysis.optimization.changes_made && analysis.optimization.changes_made.length > 0 && analysis.optimization.changes_made[0] !== 'none' && (
+                                                <VStack align="stretch" spacing={2.5}>
+                                                    {analysis.optimization.changes_made.map((change, index) => (
+                                                        <HStack key={index} bg="white" p={2.5} borderRadius="xl" borderWidth="1px" borderColor="purple.100">
+                                                            <Circle size="6px" bg="purple.400" />
+                                                            <Text fontSize="xs" fontWeight="800" color="purple.700">
+                                                                {change}
+                                                            </Text>
+                                                        </HStack>
+                                                    ))}
+                                                </VStack>
+                                            )}
+                                        </Box>
+                                    )}
+
+                                    {/* Mindset Insight */}
+                                    {analysis?.insights?.mindset_shift && (
+                                        <Box w="full" p={4} borderRadius="xl" borderLeftWidth="4px" borderLeftColor="teal.400" bg="gray.50">
+                                            <Text fontSize="xs" fontWeight="900" color="teal.700" mb={1} textTransform="uppercase">Key Mindset Shift</Text>
+                                            <Text fontSize="sm" fontWeight="700" color="gray.700" fontStyle="italic">
+                                                {analysis.insights.mindset_shift}
+                                            </Text>
+                                        </Box>
+                                    )}
                                 </VStack>
                                 <Button
                                     colorScheme="teal" borderRadius="xl" fontWeight="800" w="full"
-                                    onClick={() => { setShowAnalysis(false); startNewSession(null) }}
+                                    onClick={() => { setShowAnalysis(false); startNewSession(null); window.location.reload(); }}
                                 >
                                     Start Fresh Conversation
                                 </Button>
                                 <Button
                                     variant="ghost" size="sm" borderRadius="xl" fontWeight="700" color="gray.400"
-                                    onClick={() => setShowAnalysis(false)}
+                                    onClick={() => { setShowAnalysis(false); window.location.reload(); }}
                                 >
                                     Stay here
                                 </Button>

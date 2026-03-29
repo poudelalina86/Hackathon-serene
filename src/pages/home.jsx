@@ -765,12 +765,12 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 </HStack>
             </Box>
 
-	        <VStack spacing={2} align="stretch">
-	            <Button leftIcon={<FiLayout />} justifyContent="start" variant={tabIndex === 0 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(0)}>Focus</Button>
-	            <Button leftIcon={<FiCheckCircle />} justifyContent="start" variant={tabIndex === 1 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(1)}>Log</Button>
-	            <Button leftIcon={<FiAward />} justifyContent="start" variant={tabIndex === 2 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(2)}>Stats</Button>
-	            <Button leftIcon={<FiUser />} justifyContent="start" variant={tabIndex === 3 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(3)}>Profile</Button>
-	        </VStack>
+            <VStack spacing={2} align="stretch">
+                <Button leftIcon={<FiLayout />} justifyContent="start" variant={tabIndex === 0 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(0)}>Focus</Button>
+                <Button leftIcon={<FiCheckCircle />} justifyContent="start" variant={tabIndex === 1 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(1)}>Log</Button>
+                <Button leftIcon={<FiAward />} justifyContent="start" variant={tabIndex === 2 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(2)}>Stats</Button>
+                <Button leftIcon={<FiUser />} justifyContent="start" variant={tabIndex === 3 ? "solid" : "ghost"} colorScheme="blue" onClick={() => handleTabChange(3)}>Profile</Button>
+            </VStack>
 
             <Divider />
 
@@ -829,22 +829,22 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 {/* Mobile Header (Hidden on Laptop) */}
                 {!embedded && (
                     <Box display={{ base: "block", lg: "none" }} bg={cardBg} pt={10} pb={6} px={6} shadow="sm" borderBottomRadius="3xl">
-                    <Container maxW="container.md" p={0}>
-                        <HStack justify="space-between" align="center" mb={6}>
-                            <HStack spacing={4}>
-                                <Avatar size="lg" src="https://bit.ly/tioluwani-kolawole" border="2px solid" borderColor="blue.500" />
-                                <VStack align="start" spacing={0}>
-                                    <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
-                                    <Heading size="lg" fontWeight="900" letterSpacing="-1px">Life Agent</Heading>
-                                </VStack>
+                        <Container maxW="container.md" p={0}>
+                            <HStack justify="space-between" align="center" mb={6}>
+                                <HStack spacing={4}>
+                                    <Avatar size="lg" src="https://bit.ly/tioluwani-kolawole" border="2px solid" borderColor="blue.500" />
+                                    <VStack align="start" spacing={0}>
+                                        <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
+                                        <Heading size="lg" fontWeight="900" letterSpacing="-1px">Life Agent</Heading>
+                                    </VStack>
+                                </HStack>
+                                <Box bg="blue.50" p={3} borderRadius="xl" textAlign="center">
+                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="blue.600">{processStats.days}</Text>
+                                    <Text fontSize="10px" fontWeight="900" color="blue.400">DAYS IN PROCESS</Text>
+                                </Box>
                             </HStack>
-                            <Box bg="blue.50" p={3} borderRadius="xl" textAlign="center">
-                                <Text fontSize="xl" fontWeight="900" lineHeight="1" color="blue.600">{processStats.days}</Text>
-                                <Text fontSize="10px" fontWeight="900" color="blue.400">DAYS IN PROCESS</Text>
-                            </Box>
-                        </HStack>
-                        <Progress value={progressPercent} size="sm" colorScheme="blue" borderRadius="full" />
-                    </Container>
+                            <Progress value={progressPercent} size="sm" colorScheme="blue" borderRadius="full" />
+                        </Container>
                     </Box>
                 )}
 
@@ -854,16 +854,16 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                     mt={embedded ? 0 : { base: 6, lg: 12 }}
                     p={4}
                 >
-		                    <Tabs index={tabIndex} onChange={handleTabChange} variant="soft-rounded" colorScheme="blue">
-		                        <TabList
-		                            display={embedded ? "flex" : { base: "flex", lg: "none" }}
-		                            bg={cardBg} p={2} borderRadius="2xl" shadow="sm" mb={6} justifyContent="center" gap={2}
-		                        >
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiLayout} /><Text fontWeight="700">FOCUS</Text></HStack></Tab>
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiCheckCircle} /><Text fontWeight="700">LOG</Text></HStack></Tab>
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiAward} /><Text fontWeight="700">STATS</Text></HStack></Tab>
-	                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiUser} /><Text fontWeight="700">PROFILE</Text></HStack></Tab>
-	                        </TabList>
+                    <Tabs index={tabIndex} onChange={handleTabChange} variant="soft-rounded" colorScheme="blue">
+                        <TabList
+                            display={embedded ? "flex" : { base: "flex", lg: "none" }}
+                            bg={cardBg} p={2} borderRadius="2xl" shadow="sm" mb={6} justifyContent="center" gap={2}
+                        >
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiLayout} /><Text fontWeight="700">FOCUS</Text></HStack></Tab>
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiCheckCircle} /><Text fontWeight="700">LOG</Text></HStack></Tab>
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiAward} /><Text fontWeight="700">STATS</Text></HStack></Tab>
+                            <Tab py={2} flex={1}><HStack spacing={2}><Icon as={FiUser} /><Text fontWeight="700">PROFILE</Text></HStack></Tab>
+                        </TabList>
 
                         <TabPanels>
                             {/* FOCUS TAB */}
@@ -1054,9 +1054,9 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                 })}
                             </TabPanel>
 
-	                            {/* STATS TAB */}
-	                            <TabPanel p={0}>
-                                
+                            {/* STATS TAB */}
+                            <TabPanel p={0}>
+
 
                                 {/* Daily History Chart */}
                                 {progress.history?.length > 0 && (
@@ -1082,7 +1082,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                     </Box>
                                 )}
 
-                        
+
 
                                 {/* ── Mental Health Insights ── */}
                                 <Box mt={8}>
@@ -1094,69 +1094,69 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                     </HStack>
                                     <MentalHealthStats apiBase={API_BASE} username={USERNAME} />
                                 </Box>
-	                            </TabPanel>
+                            </TabPanel>
 
-	                            {/* PROFILE TAB */}
-	                            <TabPanel p={0}>
-	                                <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8}>
-	                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
-	                                        <HStack spacing={4} mb={6}>
-	                                            <Avatar size="lg" src="/avatar.png" name="Life Agent" border="2px solid" borderColor="blue.500" />
-	                                            <VStack align="start" spacing={0}>
-	                                                <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
-	                                                <Heading size="md" fontWeight="900">Life Agent</Heading>
-	                                                <Text fontSize="sm" color="gray.500" fontWeight="700">@{USERNAME}</Text>
-	                                            </VStack>
-	                                        </HStack>
-	                                        <Divider mb={6} />
-	                                        <SimpleGrid columns={2} spacing={5}>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Level</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{level}</Text>
-	                                            </Box>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">XP</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{xp}</Text>
-	                                            </Box>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Streak</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="orange.500" lineHeight="1">{progress.streak}</Text>
-	                                            </Box>
-	                                            <Box>
-	                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Completions</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="green.500" lineHeight="1">{progress.total_tasks_completed}</Text>
-	                                            </Box>
-	                                        </SimpleGrid>
-	                                    </Box>
+                            {/* PROFILE TAB */}
+                            <TabPanel p={0}>
+                                <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8}>
+                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
+                                        <HStack spacing={4} mb={6}>
+                                            <Avatar size="lg" src="/avatar.png" name="Life Agent" border="2px solid" borderColor="blue.500" />
+                                            <VStack align="start" spacing={0}>
+                                                <Badge colorScheme="blue" borderRadius="full">Rank {level}</Badge>
+                                                <Heading size="md" fontWeight="900">Life Agent</Heading>
+                                                <Text fontSize="sm" color="gray.500" fontWeight="700">@{USERNAME}</Text>
+                                            </VStack>
+                                        </HStack>
+                                        <Divider mb={6} />
+                                        <SimpleGrid columns={2} spacing={5}>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Level</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{level}</Text>
+                                            </Box>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">XP</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.600" lineHeight="1">{xp}</Text>
+                                            </Box>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Streak</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="orange.500" lineHeight="1">{progress.streak}</Text>
+                                            </Box>
+                                            <Box>
+                                                <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Completions</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="green.500" lineHeight="1">{progress.total_tasks_completed}</Text>
+                                            </Box>
+                                        </SimpleGrid>
+                                    </Box>
 
-	                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
-	                                        <Heading size="md" mb={6}>Process Age</Heading>
-	                                        <SimpleGrid columns={2} spacing={5} mb={8}>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Days</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.days}</Text>
-	                                            </Box>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Weeks</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.weeks}</Text>
-	                                            </Box>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Months</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.months}</Text>
-	                                            </Box>
-	                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
-	                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Years</Text>
-	                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.years}</Text>
-	                                            </Box>
-	                                        </SimpleGrid>
-	                                        <Text fontSize="sm" color="gray.500" fontWeight="700">
-	                                            Your stats evolve automatically from your daily actions. Keep executing missions and let the Oracle calibrate your trajectory.
-	                                        </Text>
-	                                    </Box>
-	                                </SimpleGrid>
-	                            </TabPanel>
-	                        </TabPanels>
-	                    </Tabs>
+                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
+                                        <Heading size="md" mb={6}>Process Age</Heading>
+                                        <SimpleGrid columns={2} spacing={5} mb={8}>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Days</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.days}</Text>
+                                            </Box>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Weeks</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.weeks}</Text>
+                                            </Box>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Months</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.months}</Text>
+                                            </Box>
+                                            <Box bg="blue.50" p={5} borderRadius="2xl" border="1px solid" borderColor="blue.100">
+                                                <Text fontSize="xs" fontWeight="900" color="blue.600" textTransform="uppercase">Years</Text>
+                                                <Text fontSize="3xl" fontWeight="900" color="blue.700" lineHeight="1">{processStats.years}</Text>
+                                            </Box>
+                                        </SimpleGrid>
+                                        <Text fontSize="sm" color="gray.500" fontWeight="700">
+                                            Your stats evolve automatically from your daily actions. Keep executing missions and let the Oracle calibrate your trajectory.
+                                        </Text>
+                                    </Box>
+                                </SimpleGrid>
+                            </TabPanel>
+                        </TabPanels>
+                    </Tabs>
                 </Container>
             </Box>
 
