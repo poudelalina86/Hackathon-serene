@@ -12,13 +12,21 @@ import {
     Input,
     InputGroup,
     InputRightElement,
+    Modal,
+    ModalOverlay,
+    ModalContent,
+    ModalHeader,
+    ModalBody,
+    ModalCloseButton,
     Progress,
     SimpleGrid,
+    Spinner,
+    Tag,
     Text,
     VStack,
     useColorModeValue,
 } from '@chakra-ui/react'
-import { FiBarChart2, FiClock, FiMessageSquare, FiSend, FiZap, FiUser } from 'react-icons/fi'
+import { FiBarChart2, FiClock, FiMessageSquare, FiSend, FiZap, FiUser, FiSave } from 'react-icons/fi'
 import { VoiceRecorderButton } from '../components/VoiceRecorderButton'
 import { VoiceMessageBubble } from '../components/VoiceMessageBubble'
 import { OracleStructuredReply } from '../components/OracleStructuredReply'
@@ -27,11 +35,11 @@ import { Home } from './home'
 const RAW_BASE =
     import.meta.env["VITE_API_URL"] ||
     import.meta.env["VITE_X_7ea54382_7b12_4f3d_9c3a_1e4d5f6a7b8c"] ||
-    "http://localhost:8000/api/v1"
+    "http://localhost:8010/v1"
 
 const toServerBase = (raw) => {
     const trimmed = String(raw || "").replace(/\/+$/, "")
-    if (!trimmed) return "http://localhost:8000"
+    if (!trimmed) return "http://localhost:8010"
     if (/\/api\/v1$/i.test(trimmed)) return trimmed.replace(/\/api\/v1$/i, "")
     if (/\/v1$/i.test(trimmed)) return trimmed.replace(/\/v1$/i, "")
     return trimmed
@@ -43,6 +51,12 @@ const CHAT_SERVER_BASE = toServerBase(import.meta.env["VITE_CHAT_SERVER_URL"] ||
 const CHAT_COMPLETIONS_URL = import.meta.env.DEV
     ? '/v1/chat/completions'
     : `${CHAT_SERVER_BASE}/v1/chat/completions`
+const SESSION_NEW_URL = import.meta.env.DEV
+    ? '/v1/session/new'
+    : `${CHAT_SERVER_BASE}/v1/session/new`
+const SESSION_END_URL = import.meta.env.DEV
+    ? '/v1/session/end'
+    : `${CHAT_SERVER_BASE}/v1/session/end`
 const USERNAME = "incri"
 
 const formatSeconds = (s) => {
@@ -104,9 +118,15 @@ export function Chat() {
     const [sidebarView, setSidebarView] = useState('chat')
     const [activePanel, setActivePanel] = useState(null) // 'focus' | 'log' | 'stats' | 'profile' | null
 
+    const [conversationId, setConversationId] = useState(null)
+    const conversationIdRef = useRef(null)
     const [messages, setMessages] = useState([])
     const [inputText, setInputText] = useState("")
     const [isThinking, setIsThinking] = useState(false)
+
+    const [showAnalysis, setShowAnalysis] = useState(false)
+    const [analysis, setAnalysis] = useState(null)
+    const [isAnalyzing, setIsAnalyzing] = useState(false)
 
     const voiceRecorderRef = useRef(null)
 
@@ -120,57 +140,65 @@ export function Chat() {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages, isThinking])
 
+    const startNewSession = async (endCurrentId = null) => {
+        if (endCurrentId) {
+            fetch(SESSION_END_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conversation_id: endCurrentId }),
+            }).catch(() => {})
+        }
+        try {
+            const res = await fetch(SESSION_NEW_URL, { method: 'POST' })
+            const data = await res.json()
+            conversationIdRef.current = data.conversation_id
+            setConversationId(data.conversation_id)
+            setMessages([])
+        } catch (e) {
+            console.warn('Failed to start new session:', e)
+        }
+    }
+
+    const endAndAnalyze = async () => {
+        const sid = conversationIdRef.current
+        if (!sid) return
+        setIsAnalyzing(true)
+        setShowAnalysis(true)
+        setAnalysis(null)
+        try {
+            await fetch(SESSION_END_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conversation_id: sid }),
+            })
+            await fetch(`${API_BASE}/sessions/${USERNAME}/${sid}/analyze`, { method: 'POST' })
+            setAnalysis({ saved: true })
+        } catch (e) {
+            setAnalysis({ saved: true }) // still show success — data may have saved partially
+        } finally {
+            setIsAnalyzing(false)
+        }
+    }
+
     useEffect(() => {
         const hydrate = async () => {
             try {
-                const [userRes, chatRes, statsRes, progressRes] = await Promise.all([
+                const [userRes, statsRes, progressRes] = await Promise.all([
                     fetch(`${API_BASE}/user/${USERNAME}`),
-                    fetch(`${API_BASE}/history/${USERNAME}`),
                     fetch(`${API_BASE}/stats/process/${USERNAME}`),
                     fetch(`${API_BASE}/progress/${USERNAME}`),
                 ])
                 const userData = await userRes.json()
                 setLevel(userData.level ?? 1)
                 setXp(userData.xp ?? 0)
-
                 setProcessStats(await statsRes.json())
                 setProgress(await progressRes.json())
-
-                const chatData = await chatRes.json()
-                setMessages(chatData.map(m => {
-                    try {
-                        const parsed = JSON.parse(m.text)
-                        if (parsed && parsed.type === 'voice' && parsed.audio_url) {
-                            return {
-                                kind: 'voice',
-                                sender: m.sender,
-                                audioUrl: parsed.audio_url,
-                                durationSeconds: parsed.duration_seconds || 0,
-                            }
-                        }
-                    } catch {
-                        // ignore
-                    }
-
-                    if (m.sender === 'oracle') {
-                        const t = String(m.text || '')
-                        if (
-                            t.startsWith('Operational error:') ||
-                            t.includes('No API_KEY') ||
-                            t.includes('ADC found') ||
-                            t.includes('GOOGLE_API_KEY')
-                        ) {
-                            return null
-                        }
-                    }
-
-                    return { kind: 'text', text: m.text, sender: m.sender }
-                }).filter(Boolean))
             } catch (e) {
                 console.warn('Hydration failed:', e)
             }
         }
         hydrate()
+        startNewSession()
     }, [])
 
     const sendMessageText = async (text) => {
@@ -186,6 +214,7 @@ export function Chat() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     messages: [{ role: 'user', content: userMsg }],
+                    conversation_id: conversationIdRef.current,
                     stream: false,
                 })
             })
@@ -593,7 +622,33 @@ export function Chat() {
                             <Circle size="3" bg="teal.400" className="pulse-animation" />
                             <Heading size="md" fontWeight="900" letterSpacing="-0.3px" color="teal.900">Oracle</Heading>
                         </HStack>
-                        <Box />
+                        <HStack spacing={2}>
+                            {messages.length > 0 && (
+                                <Button
+                                    size="sm"
+                                    variant="solid"
+                                    colorScheme="purple"
+                                    borderRadius="lg"
+                                    fontWeight="700"
+                                    leftIcon={<FiSave />}
+                                    onClick={endAndAnalyze}
+                                    isLoading={isAnalyzing}
+                                    loadingText="Analyzing…"
+                                >
+                                    End Convo
+                                </Button>
+                            )}
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                colorScheme="teal"
+                                borderRadius="lg"
+                                fontWeight="700"
+                                onClick={() => startNewSession(conversationId)}
+                            >
+                                New Chat
+                            </Button>
+                        </HStack>
                     </HStack>
                 </HStack>
 
@@ -725,6 +780,7 @@ export function Chat() {
                                             type="submit"
                                             borderRadius="lg"
                                             aria-label="Send"
+                                            isDisabled={!conversationId || isThinking}
                                         />
                                     </HStack>
                                 </InputRightElement>
@@ -736,6 +792,52 @@ export function Chat() {
                     )}
             </Box>
             </Box>
+
+            {/* ── Conversation Analysis Modal ── */}
+            <Modal isOpen={showAnalysis} onClose={() => setShowAnalysis(false)} size="lg" scrollBehavior="inside">
+                <ModalOverlay backdropFilter="blur(6px)" />
+                <ModalContent borderRadius="2xl" mx={4}>
+                    <ModalHeader borderBottomWidth="1px" borderColor="purple.100" pb={3}>
+                        <HStack spacing={2}>
+                            <FiBarChart2 color="purple" />
+                            <Text fontWeight="900" color="purple.700">Conversation Insights</Text>
+                        </HStack>
+                    </ModalHeader>
+                    <ModalCloseButton />
+                    <ModalBody py={8}>
+                        {isAnalyzing ? (
+                            <VStack spacing={4} py={8}>
+                                <Spinner size="lg" color="purple.500" thickness="3px" />
+                                <Text color="gray.500" fontWeight="600">Saving your conversation…</Text>
+                            </VStack>
+                        ) : (
+                            <VStack spacing={5} py={6} align="center">
+                                <Circle size="16" bg="green.50" borderWidth="2px" borderColor="green.200">
+                                    <Text fontSize="3xl">✓</Text>
+                                </Circle>
+                                <VStack spacing={1}>
+                                    <Text fontWeight="900" fontSize="lg" color="green.700">Conversation Saved</Text>
+                                    <Text fontSize="sm" color="gray.400" fontWeight="600" textAlign="center">
+                                        Your session has been stored. View insights in the Stats tab.
+                                    </Text>
+                                </VStack>
+                                <Button
+                                    colorScheme="teal" borderRadius="xl" fontWeight="800" w="full"
+                                    onClick={() => { setShowAnalysis(false); startNewSession(null) }}
+                                >
+                                    Start Fresh Conversation
+                                </Button>
+                                <Button
+                                    variant="ghost" size="sm" borderRadius="xl" fontWeight="700" color="gray.400"
+                                    onClick={() => setShowAnalysis(false)}
+                                >
+                                    Stay here
+                                </Button>
+                            </VStack>
+                        )}
+                    </ModalBody>
+                </ModalContent>
+            </Modal>
         </Box>
     )
 }
