@@ -35,7 +35,7 @@ import { Home } from './home'
 const RAW_BASE =
     import.meta.env["VITE_API_URL"] ||
     import.meta.env["VITE_X_7ea54382_7b12_4f3d_9c3a_1e4d5f6a7b8c"] ||
-    "http://localhost:8010/v1"
+    "http://localhost:8000/api/v1"
 
 const toServerBase = (raw) => {
     const trimmed = String(raw || "").replace(/\/+$/, "")
@@ -349,6 +349,25 @@ export function Chat() {
         }
     }
 
+    const ensureConversationId = async () => {
+        if (conversationIdRef.current) return conversationIdRef.current
+        try {
+            const res = await fetch(SESSION_NEW_URL, { method: 'POST' })
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const data = await res.json().catch(() => ({}))
+            const cid = data?.conversation_id
+            if (!cid) throw new Error('Missing conversation_id')
+            conversationIdRef.current = cid
+            setConversationId(cid)
+            try { localStorage.setItem(LAST_SESSION_KEY, cid) } catch { /* ignore */ }
+            fetchSessions()
+            return cid
+        } catch (e) {
+            console.warn('Failed to ensure conversation:', e)
+            return null
+        }
+    }
+
     const endAndAnalyze = async () => {
         const sid = conversationIdRef.current
         if (!sid) return
@@ -425,6 +444,8 @@ export function Chat() {
     const sendMessageText = async (text) => {
         const userMsg = (text || '').trim()
         if (!userMsg) return
+
+        await ensureConversationId()
 
         const oracleMsgId = `${Date.now()}-oracle-${Math.random().toString(16).slice(2)}`
         setMessages(prev => [...prev, { kind: 'text', text: userMsg, sender: 'user' }])
@@ -541,6 +562,9 @@ export function Chat() {
 
     const sendVoiceMessage = async ({ blob }) => {
         if (isThinking) return
+
+        await ensureConversationId()
+
         const tempId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
         const localUrl = URL.createObjectURL(blob)
         const durationSeconds = await getBlobDurationSeconds(blob)
@@ -1132,12 +1156,12 @@ export function Chat() {
 	                                        <VoiceRecorderButton
 	                                            ref={voiceRecorderRef}
 	                                            size="sm"
-	                                            isDisabled={!conversationId}
+	                                            isDisabled={isThinking}
 	                                            isPaused={isThinking}
 	                                            autoSendOnSilence
 	                                            silenceMs={3500}
-	                                            minRecordMs={800}
-	                                            volumeThreshold={0.015}
+	                                            minRecordMs={650}
+	                                            volumeThreshold={0.008}
 	                                            onRecordingStateChange={({ isRecording }) => setIsVoiceRecording(Boolean(isRecording))}
 	                                            onRecordingComplete={(payload) => sendVoiceMessage(payload)}
 	                                        />

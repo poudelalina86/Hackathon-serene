@@ -49,6 +49,9 @@ export const VoiceRecorderButton = forwardRef(function VoiceRecorderButton(
     const stopReasonRef = useRef('session') // 'utterance' | 'pause' | 'session'
     const dropNextBlobRef = useRef(false)
     const mimeTypeRef = useRef('audio/webm')
+    const ensureRecorderInFlightRef = useRef(false)
+    const lastEnsureRecorderAtRef = useRef(0)
+    const ensureGraphInFlightRef = useRef(false)
 
     useEffect(() => {
         onCompleteRef.current = onRecordingComplete
@@ -235,6 +238,23 @@ export const VoiceRecorderButton = forwardRef(function VoiceRecorderButton(
                 }
 
                 if (reason === 'session') {
+                    // Fallback: if auto-send is enabled but silence detection fails (no analyser),
+                    // allow a manual stop to still send what was recorded.
+                    try {
+                        const longEnough = Date.now() - startedAtRef.current >= minRecordMs
+                        if (
+                            autoSendOnSilence &&
+                            !cancelledRef.current &&
+                            !shouldDrop &&
+                            blob.size > 0 &&
+                            heardSpeechRef.current &&
+                            longEnough
+                        ) {
+                            onCompleteRef.current?.({ blob, mimeType: blob.type, auto: false })
+                        }
+                    } catch {
+                        // ignore
+                    }
                     cleanupAudioGraph()
                     cleanupStream()
                     stoppingSessionRef.current = false
@@ -266,6 +286,24 @@ export const VoiceRecorderButton = forwardRef(function VoiceRecorderButton(
         }
     }
 
+    const ensureRecorderRunning = () => {
+        if (isPausedRef.current) return
+        if (!isRecordingRef.current) return
+        if (cancelledRef.current || stoppingSessionRef.current) return
+        if (recorderRef.current && recorderRef.current.state === 'recording') return
+
+        const now = Date.now()
+        if (ensureRecorderInFlightRef.current) return
+        if (now - lastEnsureRecorderAtRef.current < 600) return
+        lastEnsureRecorderAtRef.current = now
+        ensureRecorderInFlightRef.current = true
+        Promise.resolve(startRecorder())
+            .catch(() => {})
+            .finally(() => {
+                ensureRecorderInFlightRef.current = false
+            })
+    }
+
     const start = async () => {
         cancelledRef.current = false
         stoppingSessionRef.current = false
@@ -287,14 +325,27 @@ export const VoiceRecorderButton = forwardRef(function VoiceRecorderButton(
             }
             const data = new Float32Array(2048)
             const tick = () => {
-                if (!analyserRef.current) return
                 if (!isRecordingRef.current) return
                 if (cancelledRef.current || stoppingSessionRef.current) return
                 if (isPausedRef.current) {
                     rafRef.current = requestAnimationFrame(tick)
                     return
                 }
+
+                if (!analyserRef.current) {
+                    // Try to self-heal if the AudioContext/graph wasn't ready yet.
+                    if (!ensureGraphInFlightRef.current) {
+                        ensureGraphInFlightRef.current = true
+                        Promise.resolve(ensureAudioGraph())
+                            .catch(() => {})
+                            .finally(() => { ensureGraphInFlightRef.current = false })
+                    }
+                    rafRef.current = requestAnimationFrame(tick)
+                    return
+                }
                 if (!recorderRef.current || recorderRef.current.state !== 'recording') {
+                    // Self-heal: MediaRecorder can end up stopped after a pause/resume.
+                    ensureRecorderRunning()
                     rafRef.current = requestAnimationFrame(tick)
                     return
                 }
