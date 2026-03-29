@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { clearUser, getUsername } from '../lib/session'
 import {
     Avatar,
     Badge,
@@ -26,16 +28,17 @@ import {
     VStack,
     useColorModeValue,
 } from '@chakra-ui/react'
-import { FiBarChart2, FiClock, FiMessageSquare, FiSend, FiZap, FiUser, FiSave } from 'react-icons/fi'
+import { FiBarChart2, FiBookOpen, FiClock, FiLogOut, FiMessageSquare, FiSend, FiZap, FiUser, FiSave } from 'react-icons/fi'
 import { VoiceRecorderButton } from '../components/VoiceRecorderButton'
 import { VoiceMessageBubble } from '../components/VoiceMessageBubble'
 import { OracleStructuredReply } from '../components/OracleStructuredReply'
+import { tryParseOracleReply, plainOracleDisplayText } from '../utils/oracleReply'
 import { Home } from './home'
 
 const RAW_BASE =
     import.meta.env["VITE_API_URL"] ||
     import.meta.env["VITE_X_7ea54382_7b12_4f3d_9c3a_1e4d5f6a7b8c"] ||
-    "http://localhost:8010/v1"
+    "http://localhost:8000/api/v1"
 
 const toServerBase = (raw) => {
     const trimmed = String(raw || "").replace(/\/+$/, "")
@@ -47,17 +50,12 @@ const toServerBase = (raw) => {
 
 const SERVER_BASE = toServerBase(RAW_BASE)
 const API_BASE = `${SERVER_BASE}/api/v1`
+/** Same host as serene-backend (OpenAI-style /v1 routes). Always use absolute URLs so dev works without Vite proxy. */
 const CHAT_SERVER_BASE = toServerBase(import.meta.env["VITE_CHAT_SERVER_URL"] || SERVER_BASE)
-const CHAT_COMPLETIONS_URL = import.meta.env.DEV
-    ? '/v1/chat/completions'
-    : `${CHAT_SERVER_BASE}/v1/chat/completions`
-const SESSION_NEW_URL = import.meta.env.DEV
-    ? '/v1/session/new'
-    : `${CHAT_SERVER_BASE}/v1/session/new`
-const SESSION_END_URL = import.meta.env.DEV
-    ? '/v1/session/end'
-    : `${CHAT_SERVER_BASE}/v1/session/end`
-const USERNAME = "incri"
+const CHAT_COMPLETIONS_URL = `${CHAT_SERVER_BASE}/v1/chat/completions`
+const SESSION_NEW_URL = `${CHAT_SERVER_BASE}/v1/session/new`
+const SESSION_END_URL = `${CHAT_SERVER_BASE}/v1/session/end`
+const USERNAME = getUsername() || "guest"
 
 const formatSeconds = (s) => {
     const m = Math.floor(s / 60)
@@ -84,23 +82,8 @@ const getBlobDurationSeconds = (blob) =>
         }
     })
 
-const tryParseJsonReply = (text) => {
-    const raw = String(text || '').trim()
-    if (!raw) return null
-
-    // Strip ```json fences if present
-    const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-    const candidate = (fenced ? fenced[1] : raw).trim()
-    if (!candidate.startsWith('{') || !candidate.endsWith('}')) return null
-    try {
-        const parsed = JSON.parse(candidate)
-        return parsed && typeof parsed === 'object' ? parsed : null
-    } catch {
-        return null
-    }
-}
-
 export function Chat() {
+    const navigate = useNavigate()
     const bg = useColorModeValue('gray.50', 'gray.900')
     const cardBg = useColorModeValue('white', 'gray.800')
     const borderColor = useColorModeValue('teal.100', 'whiteAlpha.200')
@@ -414,7 +397,7 @@ export function Chat() {
                         _hover={{ opacity: 0.92 }}
                         _active={{ opacity: 0.85 }}
                     >
-                        <Avatar size="md" src="/avatar.png" name="Oracle" />
+                        <Avatar size="md" src="/logo.png" name="Serene" />
                         <VStack align="start" spacing={0}>
                             <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
                             <Heading size="sm" fontWeight="900" color="teal.900">Life Agent</Heading>
@@ -511,6 +494,26 @@ export function Chat() {
                         >
                             Profile
                         </Button>
+                        <Button
+                            leftIcon={<FiBookOpen />}
+                            colorScheme="teal"
+                            variant="ghost"
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => navigate('/blog')}
+                        >
+                            Community Blog
+                        </Button>
+                        <Button
+                            leftIcon={<FiLogOut />}
+                            colorScheme="red"
+                            variant="ghost"
+                            borderRadius="xl"
+                            justifyContent="flex-start"
+                            onClick={() => { clearUser(); navigate('/login'); }}
+                        >
+                            Log Out
+                        </Button>
                     </VStack>
 
                     <Divider my={5} borderColor="teal.100" />
@@ -546,7 +549,7 @@ export function Chat() {
                                 {(messages.slice(-5)).reverse().map((m, idx) => (
                                     <Box key={`${m.id || idx}-log`} p={3} borderRadius="xl" bg="teal.50" borderWidth="1px" borderColor="teal.100">
                                         <Text fontSize="xs" color="teal.700" fontWeight="900" mb={1} textTransform="uppercase">
-                                            {m.sender === 'user' ? 'You' : 'Oracle'}
+                                            {m.sender === 'user' ? 'You' : 'Serene'}
                                         </Text>
                                         <Text fontSize="sm" fontWeight="800" color="teal.900" noOfLines={2}>
                                             {m.kind === 'voice' ? 'Voice message' : (m.text || '')}
@@ -618,9 +621,9 @@ export function Chat() {
                 >
                     <HStack w="full" maxW="980px" mx="auto" justify="space-between">
                         <HStack spacing={3}>
-                            <Avatar size="md" src="/avatar.png" name="Oracle" border="2px solid" borderColor="teal.200" />
+                            <Avatar size="md" src="/logo.png" name="Serene" border="2px solid" borderColor="teal.200" />
                             <Circle size="3" bg="teal.400" className="pulse-animation" />
-                            <Heading size="md" fontWeight="900" letterSpacing="-0.3px" color="teal.900">Oracle</Heading>
+                            <Heading size="md" fontWeight="900" letterSpacing="-0.3px" color="teal.900">Serene</Heading>
                         </HStack>
                         <HStack spacing={2}>
                             {messages.length > 0 && (
@@ -648,6 +651,26 @@ export function Chat() {
                             >
                                 New Chat
                             </Button>
+                            <IconButton
+                                size="sm"
+                                icon={<FiBookOpen />}
+                                colorScheme="teal"
+                                variant="ghost"
+                                borderRadius="lg"
+                                aria-label="Community Blog"
+                                onClick={() => navigate('/blog')}
+                                display={{ base: 'flex', lg: 'none' }}
+                            />
+                            <IconButton
+                                size="sm"
+                                icon={<FiLogOut />}
+                                colorScheme="red"
+                                variant="ghost"
+                                borderRadius="lg"
+                                aria-label="Log Out"
+                                onClick={() => { clearUser(); navigate('/login'); }}
+                                display={{ base: 'flex', lg: 'none' }}
+                            />
                         </HStack>
                     </HStack>
                 </HStack>
@@ -689,7 +712,7 @@ export function Chat() {
                                         </Box>
                                     ) : (
                                         (() => {
-                                            const parsed = m.sender === 'oracle' ? tryParseJsonReply(m.text) : null
+                                            const parsed = m.sender === 'oracle' ? tryParseOracleReply(m.text) : null
                                             const isStructured = Boolean(parsed)
                                             return (
                                         <Box
@@ -708,7 +731,7 @@ export function Chat() {
                                             borderWidth={isStructured ? '0' : (m.sender === 'user' ? '0' : '1px')}
                                             borderColor={isStructured ? 'transparent' : (m.sender === 'user' ? 'transparent' : glassTealBorder)}
                                         >
-                                            {parsed ? <OracleStructuredReply data={parsed} /> : m.text}
+                                            {parsed ? <OracleStructuredReply data={parsed} /> : plainOracleDisplayText(m.text)}
                                         </Box>
                                             )
                                         })()
@@ -757,7 +780,7 @@ export function Chat() {
                                     pl="1.25rem"
                                     pr="8.5rem"
                                     py={6}
-                                    placeholder="Message Oracle…"
+                                    placeholder="Message Serene…"
                                     bg="gray.50"
                                     border="1px solid"
                                     borderColor="gray.100"

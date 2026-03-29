@@ -11,7 +11,7 @@ const getGenAI = () => {
 };
 
 const SYSTEM_PROMPT = `
-You are "The Oracle", an advanced Agentic AI Life Coach for the Life RPG application.
+You are "Serene", an advanced Agentic AI Life Coach for the Life RPG application.
 Your goal is to help the user master their life through discipline and gamification.
 
 CORE CAPABILITIES:
@@ -43,7 +43,7 @@ export const getOracleResponse = async (state) => {
         const genAI = getGenAI();
         if (!genAI) {
             return {
-                message: "ORACLE OFFLINE: Set VITE_GEMINI_API_KEY to enable AI guidance.",
+                message: "SERENE OFFLINE: Set VITE_GEMINI_API_KEY to enable AI guidance.",
                 action: "none",
             };
         }
@@ -71,7 +71,7 @@ export const getOracleResponse = async (state) => {
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         return jsonMatch ? JSON.parse(jsonMatch[0]) : { message: text, action: "none" };
     } catch (error) {
-        console.error("Oracle Reasoning Error:", error);
+        console.error("Serene Reasoning Error:", error);
         return {
             message: "COMMUNICATION LINK UNSTABLE. Falling back to local heuristic logic.",
             action: "none"
