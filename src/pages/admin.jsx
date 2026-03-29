@@ -1,891 +1,484 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import {
-    Badge,
-    Box,
-    Button,
-    Container,
-    Divider,
-    Drawer,
-    DrawerBody,
-    DrawerCloseButton,
-    DrawerContent,
-    DrawerHeader,
-    DrawerOverlay,
-    Flex,
-    Heading,
-    HStack,
-    Icon,
-    Input,
-    InputGroup,
-    InputLeftElement,
-    Link as ChakraLink,
-    SimpleGrid,
-    Spinner,
-    Stack,
-    Stat,
-    StatLabel,
-    StatNumber,
-    Table,
-    Tbody,
-    Td,
-    Text,
-    Th,
-    Thead,
-    Tr,
-    VStack,
-    useColorModeValue,
-    useDisclosure,
+    Avatar, Badge, Box, Button, Circle, Divider, Flex, Grid, GridItem,
+    Heading, HStack, IconButton, Input, InputGroup, InputLeftElement,
+    Modal, ModalBody, ModalCloseButton, ModalContent, ModalHeader, ModalOverlay,
+    SimpleGrid, Spinner, Tag, Text, Tooltip, VStack,
+    useColorModeValue, useDisclosure,
 } from '@chakra-ui/react'
 import { Link as RouterLink } from 'react-router-dom'
-import { FiBarChart2, FiMessageSquare, FiRefreshCw, FiSearch, FiShield, FiUser } from 'react-icons/fi'
+import {
+    FiArrowLeft, FiArrowUp, FiBarChart2, FiMessageSquare,
+    FiRefreshCw, FiSearch, FiTrendingUp, FiUser, FiZap,
+} from 'react-icons/fi'
 
 const RAW_BASE =
     import.meta.env["VITE_API_URL"] ||
-    import.meta.env["VITE_X_7ea54382_7b12_4f3d_9c3a_1e4d5f6a7b8c"] ||
     "http://localhost:8000/api/v1"
 
 const toServerBase = (raw) => {
-    const trimmed = String(raw || "").replace(/\/+$/, "")
-    if (!trimmed) return "http://localhost:8000"
-    if (/\/api\/v1$/i.test(trimmed)) return trimmed.replace(/\/api\/v1$/i, "")
-    if (/\/v1$/i.test(trimmed)) return trimmed.replace(/\/v1$/i, "")
-    return trimmed
+    const t = String(raw || "").replace(/\/+$/, "")
+    if (/\/api\/v1$/i.test(t)) return t.replace(/\/api\/v1$/i, "")
+    if (/\/v1$/i.test(t)) return t.replace(/\/v1$/i, "")
+    return t
 }
 
-const SERVER_BASE = toServerBase(RAW_BASE)
-const API_BASE = `${SERVER_BASE}/api/v1`
+const API_BASE = `${toServerBase(RAW_BASE)}/api/v1`
 
-const safeNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0)
-const asText = (v) => (v === null || v === undefined ? '' : String(v))
+const ENERGY_LABEL = { very_low: 'Very Low', low: 'Low', neutral: 'Neutral', high: 'High', very_high: 'Very High' }
+const ENERGY_COLOR = { very_low: 'red', low: 'orange', neutral: 'gray', high: 'teal', very_high: 'green' }
+const PROGRESS_COLOR = { significant: 'green', moderate: 'teal', slight: 'yellow', none: 'gray' }
 
-const truncate = (s, n = 120) => {
-    const t = asText(s).trim()
-    if (!t) return ''
-    return t.length > n ? `${t.slice(0, n).trim()}…` : t
+const fmt = (iso) => {
+    if (!iso) return '—'
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-const extractTextFromMaybeJson = (text) => {
-    const raw = asText(text).trim()
-    if (!raw) return ''
-    try {
-        const obj = JSON.parse(raw)
-        if (obj && typeof obj === 'object') {
-            return (
-                asText(obj.message).trim() ||
-                asText(obj.oracle_message).trim() ||
-                asText(obj.oracle_response).trim() ||
-                asText(obj.response).trim() ||
-                asText(obj.text).trim() ||
-                raw
-            )
-        }
-        return raw
-    } catch {
-        return raw
-    }
-}
-
-const analyzeChatHistory = (history) => {
-    const items = Array.isArray(history) ? history : []
-    const normalized = items
-        .map((m) => ({
-            sender: asText(m?.sender || ''),
-            text: extractTextFromMaybeJson(m?.text),
-            createdAt: m?.created_at || m?.createdAt || m?.timestamp || null,
-        }))
-        .filter((m) => m.sender && m.text)
-
-    const userMsgs = normalized.filter((m) => m.sender !== 'oracle').slice(-12)
-    const oracleMsgs = normalized.filter((m) => m.sender === 'oracle').slice(-12)
-    const lastUser = [...userMsgs].reverse().find(Boolean) || null
-    const lastOracle = [...oracleMsgs].reverse().find(Boolean) || null
-
-    const buckets = {
-        highRisk: [
-            'suicide',
-            'kill myself',
-            'self-harm',
-            'hurt myself',
-            'end it all',
-        ],
-        stress: [
-            'stress',
-            'stressed',
-            'anxious',
-            'anxiety',
-            'panic',
-            'overwhelmed',
-            'burnout',
-            'depressed',
-            'sad',
-            'hopeless',
-            'lonely',
-            "can't sleep",
-            'insomnia',
-            "can't focus",
-        ],
-        positive: [
-            'better',
-            'calm',
-            'relieved',
-            'happy',
-            'grateful',
-            'excited',
-            'good',
-            'progress',
-            'proud',
-        ],
-    }
-
-    const counts = { highRisk: 0, stress: 0, positive: 0 }
-    const keywordCounts = new Map()
-    const scan = (t) => {
-        const text = asText(t).toLowerCase()
-        for (const k of buckets.highRisk) {
-            if (text.includes(k)) {
-                counts.highRisk += 1
-                keywordCounts.set(k, (keywordCounts.get(k) || 0) + 1)
-            }
-        }
-        for (const k of buckets.stress) {
-            if (text.includes(k)) {
-                counts.stress += 1
-                keywordCounts.set(k, (keywordCounts.get(k) || 0) + 1)
-            }
-        }
-        for (const k of buckets.positive) {
-            if (text.includes(k)) {
-                counts.positive += 1
-                keywordCounts.set(k, (keywordCounts.get(k) || 0) + 1)
-            }
-        }
-    }
-
-    userMsgs.forEach((m) => scan(m.text))
-
-    let score = 10
-    score += Math.min(100, counts.highRisk * 35)
-    score += Math.min(60, counts.stress * 8)
-    score -= Math.min(30, counts.positive * 6)
-    score = Math.max(0, Math.min(100, Math.round(score)))
-
-    const mood =
-        counts.positive >= counts.stress + 2 ? 'positive' :
-            counts.stress >= counts.positive + 2 ? 'stressed' :
-                'neutral'
-
-    const risk =
-        counts.highRisk > 0 || score >= 70 ? 'high' :
-            score >= 40 ? 'medium' :
-                'low'
-
-    const topKeywords = [...keywordCounts.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([k]) => k)
-
-    const recentUserHighlights = userMsgs
-        .slice(-3)
-        .map((m) => truncate(m.text, 140))
-        .filter(Boolean)
-
-    return {
-        score,
-        risk,
-        mood,
-        topKeywords,
-        lastUserText: lastUser ? truncate(lastUser.text, 220) : '',
-        lastOracleText: lastOracle ? truncate(lastOracle.text, 220) : '',
-        recentUserHighlights,
-        normalized,
-    }
-}
-
-function SidebarNavItem({ icon, label, to, isActive = false }) {
+// ── Stat card ──────────────────────────────────────────────────────────────────
+function StatCard({ icon, label, value, color = 'teal', sub }) {
+    const bg = useColorModeValue('white', 'gray.800')
+    const border = useColorModeValue(`${color}.100`, 'whiteAlpha.100')
     return (
-        <ChakraLink as={RouterLink} to={to} _hover={{ textDecoration: 'none' }} w="full">
-            <HStack
-                px={3}
-                py={2.5}
-                borderRadius="xl"
-                spacing={3}
-                bg={isActive ? 'teal.500' : 'transparent'}
-                color={isActive ? 'white' : 'inherit'}
-                transition="all 120ms ease"
-                _hover={{ bg: isActive ? 'teal.500' : 'blackAlpha.50' }}
-            >
-                <Icon as={icon} opacity={isActive ? 1 : 0.85} />
-                <Text fontWeight="800" fontSize="sm">
+        <Box p={5} bg={bg} borderRadius="2xl" borderWidth="1px" borderColor={border} boxShadow="sm">
+            <HStack spacing={3} mb={2}>
+                <Circle size="9" bg={`${color}.50`}>
+                    <Box as={icon} color={`${color}.500`} size={16} />
+                </Circle>
+                <Text fontSize="xs" fontWeight="800" color="gray.500" textTransform="uppercase" letterSpacing="wider">
                     {label}
                 </Text>
             </HStack>
-        </ChakraLink>
+            <Text fontSize="3xl" fontWeight="900" color={`${color}.700`} lineHeight="1">{value}</Text>
+            {sub && <Text fontSize="xs" color="gray.400" mt={1} fontWeight="600">{sub}</Text>}
+        </Box>
     )
 }
 
-export function Admin() {
-    const pageBg = useColorModeValue('#F5FBFB', 'gray.900')
-    const sidebarBg = useColorModeValue('rgba(255,255,255,0.75)', 'rgba(26,32,44,0.72)')
-    const cardBg = useColorModeValue('rgba(255,255,255,0.85)', 'rgba(26,32,44,0.72)')
-    const border = useColorModeValue('rgba(226,232,240,0.9)', 'whiteAlpha.200')
-    const muted = useColorModeValue('gray.600', 'gray.300')
-    const headingColor = useColorModeValue('teal.900', 'whiteAlpha.900')
-    const tableHeaderBg = useColorModeValue('rgba(255,255,255,0.92)', 'rgba(26,32,44,0.92)')
-    const rowHoverBg = useColorModeValue('blackAlpha.50', 'whiteAlpha.50')
-    const barTrackBg = useColorModeValue('blackAlpha.100', 'whiteAlpha.200')
-    const highlightBg = useColorModeValue('whiteAlpha.700', 'whiteAlpha.50')
-    const chatOracleBg = useColorModeValue('teal.50', 'whiteAlpha.50')
-    const chatUserBg = useColorModeValue('white', 'blackAlpha.200')
-
-    const errorBg = useColorModeValue('red.50', 'rgba(254, 178, 178, 0.10)')
-    const errorBorder = useColorModeValue('red.200', 'red.400')
-    const errorText = useColorModeValue('red.700', 'red.200')
-
-    const drawerBg = useColorModeValue('white', 'gray.900')
-
-    const { isOpen, onOpen, onClose } = useDisclosure()
-
-    const usernames = useMemo(() => {
-        const raw = String(import.meta.env.VITE_ADMIN_USERS || '').trim()
-        const list = raw
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean)
-        return list.length > 0 ? list : ['incri']
-    }, [])
-
-    const abortRef = useRef(null)
-    const [isLoading, setIsLoading] = useState(true)
-    const [rows, setRows] = useState([])
-    const [error, setError] = useState('')
-    const [query, setQuery] = useState('')
-    const [statusFilter, setStatusFilter] = useState('all') // all | ok | error
-    const [selected, setSelected] = useState(null)
-    const [lastUpdated, setLastUpdated] = useState(null)
-
-    const load = useCallback(async () => {
-        setIsLoading(true)
-        setError('')
-
-        try {
-            abortRef.current?.abort?.()
-        } catch {
-            // ignore
-        }
-
-        const ac = new AbortController()
-        abortRef.current = ac
-
-        const fetchJson = async (url) => {
-            const res = await fetch(url, { signal: ac.signal })
-            const data = await res.json().catch(() => ({}))
-            if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`)
-            return data
-        }
-
-        try {
-            const results = await Promise.all(
-                usernames.map(async (username) => {
-                    const base = { username }
-                    try {
-                        const [user, processStats, progress, history] = await Promise.all([
-                            fetchJson(`${API_BASE}/user/${username}`),
-                            fetchJson(`${API_BASE}/stats/process/${username}`),
-                            fetchJson(`${API_BASE}/progress/${username}`),
-                            fetchJson(`${API_BASE}/history/${username}`),
-                        ])
-                        return { ...base, user, processStats, progress, history, ok: true }
-                    } catch (e) {
-                        return { ...base, ok: false, error: e?.message || 'Failed to load' }
-                    }
-                })
-            )
-            setRows(results)
-            setLastUpdated(new Date())
-        } catch (e) {
-            if (e?.name === 'AbortError') return
-            setError(e?.message || 'Failed to load admin metrics')
-        } finally {
-            setIsLoading(false)
-        }
-    }, [usernames])
-
-    useEffect(() => {
-        load()
-        return () => {
-            try {
-                abortRef.current?.abort?.()
-            } catch {
-                // ignore
-            }
-        }
-    }, [load])
-
-    const derivedRows = useMemo(() => {
-        return rows.map((r) => {
-            const level = safeNum(r?.user?.level)
-            const xp = safeNum(r?.user?.xp)
-            const streak = safeNum(r?.progress?.streak)
-            const activeDays = safeNum(r?.progress?.total_days_active)
-            const tasks = safeNum(r?.progress?.total_tasks_completed)
-            const days = safeNum(r?.processStats?.days)
-            const weeks = safeNum(r?.processStats?.weeks)
-            const months = safeNum(r?.processStats?.months)
-            const years = safeNum(r?.processStats?.years)
-            const processAge = `${years}y ${months}m ${weeks}w ${days}d`
-            const analysis = analyzeChatHistory(r?.history)
-            return { ...r, level, xp, streak, activeDays, tasks, processAge, analysis }
-        })
-    }, [rows])
-
-    const filteredRows = useMemo(() => {
-        const q = query.trim().toLowerCase()
-        return derivedRows.filter((r) => {
-            if (statusFilter === 'ok' && !r.ok) return false
-            if (statusFilter === 'error' && r.ok) return false
-            if (!q) return true
-            const hay = [r.username, asText(r?.user?.email), asText(r?.user?.name)].join(' ').toLowerCase()
-            return hay.includes(q)
-        })
-    }, [derivedRows, query, statusFilter])
-
-    const summary = useMemo(() => {
-        const total = derivedRows.length
-        const ok = derivedRows.filter((r) => r.ok).length
-        const err = total - ok
-        const avgStreak = ok === 0 ? 0 : Math.round(derivedRows.filter((r) => r.ok).reduce((acc, r) => acc + safeNum(r.streak), 0) / ok)
-        const totalTasks = derivedRows.filter((r) => r.ok).reduce((acc, r) => acc + safeNum(r.tasks), 0)
-        const needsAttention = derivedRows.filter((r) => r.ok && (r.analysis?.risk === 'high' || r.analysis?.risk === 'medium')).length
-        const highRisk = derivedRows.filter((r) => r.ok && r.analysis?.risk === 'high').length
-        return { total, ok, err, avgStreak, totalTasks, needsAttention, highRisk }
-    }, [derivedRows])
-
-    const openRow = useCallback((row) => {
-        setSelected(row || null)
-        onOpen()
-    }, [onOpen])
-
-    const riskBadgeProps = useCallback((risk) => {
-        if (risk === 'high') return { colorScheme: 'red', label: 'High' }
-        if (risk === 'medium') return { colorScheme: 'orange', label: 'Medium' }
-        return { colorScheme: 'green', label: 'Low' }
-    }, [])
-
-    const moodBadgeProps = useCallback((mood) => {
-        if (mood === 'stressed') return { colorScheme: 'orange', label: 'Stressed' }
-        if (mood === 'positive') return { colorScheme: 'teal', label: 'Positive' }
-        return { colorScheme: 'gray', label: 'Neutral' }
-    }, [])
-
+// ── Energy pill ────────────────────────────────────────────────────────────────
+function EnergyTag({ value }) {
+    const color = ENERGY_COLOR[value] || 'gray'
     return (
-        <Box
-            minH="100vh"
-            bg={pageBg}
-            position="relative"
-            sx={{
-                '&::before': {
-                    content: '""',
-                    position: 'absolute',
-                    inset: 0,
-                    background:
-                        'radial-gradient(900px 380px at 20% 0%, rgba(56, 178, 172, 0.16), transparent 60%), radial-gradient(900px 380px at 90% 10%, rgba(49, 130, 206, 0.14), transparent 55%)',
-                    pointerEvents: 'none',
-                },
-            }}
-        >
-            <Flex minH="100vh" position="relative" zIndex={1}>
-                {/* Sidebar */}
-                <Box
-                    w={{ base: '0', lg: '280px' }}
-                    display={{ base: 'none', lg: 'block' }}
-                    borderRightWidth="1px"
-                    borderRightColor={border}
-                    bg={sidebarBg}
-                    backdropFilter="blur(14px)"
-                    px={4}
-                    py={6}
-                >
+        <Tag size="sm" colorScheme={color} borderRadius="full" fontWeight="800" px={3}>
+            {ENERGY_LABEL[value] || value || '—'}
+        </Tag>
+    )
+}
+
+// ── Analysis detail modal ──────────────────────────────────────────────────────
+function AnalysisModal({ item, isOpen, onClose }) {
+    if (!item) return null
+    const improved = (ENERGY_COLOR[item.final_energy] === 'green' || ENERGY_COLOR[item.final_energy] === 'teal') &&
+        (ENERGY_COLOR[item.initial_energy] === 'red' || ENERGY_COLOR[item.initial_energy] === 'orange')
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} size="xl" scrollBehavior="inside">
+            <ModalOverlay backdropFilter="blur(8px)" />
+            <ModalContent borderRadius="2xl" mx={4}>
+                <ModalHeader borderBottomWidth="1px" borderColor="purple.100">
+                    <HStack spacing={2}>
+                        <FiBarChart2 color="#805AD5" />
+                        <Text fontWeight="900" color="purple.700">Session Analysis</Text>
+                        <Badge colorScheme={PROGRESS_COLOR[item.progress_made] || 'gray'} borderRadius="full" ml={2}>
+                            {item.progress_made || 'unknown'}
+                        </Badge>
+                    </HStack>
+                    <Text fontSize="xs" color="gray.400" fontWeight="600" mt={1}>
+                        {item.username} · {fmt(item.analyzed_at)}
+                    </Text>
+                </ModalHeader>
+                <ModalCloseButton />
+                <ModalBody py={6}>
                     <VStack align="stretch" spacing={5}>
-                        <HStack spacing={3} px={2}>
-                            <Box
-                                w="36px"
-                                h="36px"
-                                borderRadius="14px"
-                                bg="teal.500"
-                                color="white"
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="center"
-                                boxShadow="lg"
-                            >
-                                <Icon as={FiShield} />
-                            </Box>
-                            <VStack spacing={0} align="start">
-                                <Text fontWeight="900" letterSpacing="-0.3px" color={headingColor}>
-                                    Admin
-                                </Text>
-                                <Text fontSize="xs" color={muted} fontWeight="700">
-                                    Premium dashboard
-                                </Text>
-                            </VStack>
-                        </HStack>
 
-                        <VStack align="stretch" spacing={1}>
-                            <SidebarNavItem icon={FiMessageSquare} label="Chat" to="/" />
-                            <SidebarNavItem icon={FiBarChart2} label="Admin" to="/admin" isActive />
-                            <SidebarNavItem icon={FiUser} label="Account" to="/account/profile" />
-                        </VStack>
-
-                        <Box px={2}>
-                            <Divider borderColor={border} />
+                        <Box p={4} borderRadius="xl" bg="purple.50" borderWidth="1px" borderColor="purple.100">
+                            <Text fontSize="10px" fontWeight="900" color="purple.500" textTransform="uppercase" mb={1}>Core Problem</Text>
+                            <Text fontWeight="700" color="purple.900">{item.core_problem || '—'}</Text>
                         </Box>
 
-                        <Box px={2}>
-                            <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.14em" textTransform="uppercase" mb={3}>
-                                Overview
-                            </Text>
-                            <VStack align="stretch" spacing={3}>
-                                <Box bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl" p={4} backdropFilter="blur(14px)">
-                                    <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase">
-                                        Users
-                                    </Text>
-                                    <Text fontSize="2xl" fontWeight="900" letterSpacing="-0.6px" color={headingColor}>
-                                        {summary.total}
-                                    </Text>
-                                    <HStack spacing={2} mt={2}>
-                                        <Badge colorScheme="green" borderRadius="full">OK {summary.ok}</Badge>
-                                        <Badge colorScheme="red" borderRadius="full">Err {summary.err}</Badge>
-                                    </HStack>
-                                </Box>
-                                <Box bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl" p={4} backdropFilter="blur(14px)">
-                                    <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase">
-                                        Avg streak
-                                    </Text>
-                                    <Text fontSize="2xl" fontWeight="900" letterSpacing="-0.6px" color={headingColor}>
-                                        {summary.avgStreak}
-                                    </Text>
-                                    <Text fontSize="sm" color={muted} fontWeight="700">
-                                        Total tasks: {summary.totalTasks}
-                                    </Text>
-                                </Box>
-                            </VStack>
-                        </Box>
-                    </VStack>
-                </Box>
-
-                {/* Main */}
-                <Box flex={1} px={{ base: 4, lg: 8 }} py={{ base: 6, lg: 10 }}>
-                    <Container maxW="1200px" p={0}>
-                        <Stack direction={{ base: 'column', md: 'row' }} justify="space-between" align={{ base: 'stretch', md: 'center' }} spacing={4} mb={6}>
-                            <VStack align="start" spacing={1}>
-                                <Heading size="lg" letterSpacing="-0.6px" color={headingColor}>
-                                    Admin Dashboard
-                                </Heading>
-                                <Text color={muted} fontSize="sm" fontWeight="700">
-                                    Metrics per user • {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Not updated yet'}
-                                </Text>
-                            </VStack>
-
-                            <HStack spacing={3} justify="flex-end">
-                                <InputGroup w={{ base: 'full', md: '340px' }}>
-                                    <InputLeftElement pointerEvents="none">
-                                        <Icon as={FiSearch} color={muted} />
-                                    </InputLeftElement>
-                                    <Input
-                                        value={query}
-                                        onChange={(e) => setQuery(e.target.value)}
-                                        placeholder="Search users…"
-                                        bg={cardBg}
-                                        borderColor={border}
-                                        borderRadius="xl"
-                                        fontWeight="700"
-                                    />
-                                </InputGroup>
-                                <Button
-                                    leftIcon={<FiRefreshCw />}
-                                    onClick={load}
-                                    isLoading={isLoading}
-                                    variant="solid"
-                                    colorScheme="teal"
-                                    borderRadius="xl"
-                                >
-                                    Refresh
-                                </Button>
-                            </HStack>
-                        </Stack>
-
-                        {error && (
-                            <Box mb={6} p={4} bg={errorBg} borderWidth="1px" borderColor={errorBorder} borderRadius="2xl">
-                                <Text fontWeight="900" color={errorText}>Error</Text>
-                                <Text color={errorText} fontSize="sm" fontWeight="700">
-                                    {error}
-                                </Text>
+                        <SimpleGrid columns={2} spacing={3}>
+                            <Box p={4} borderRadius="xl" bg="red.50" borderWidth="1px" borderColor="red.100">
+                                <Text fontSize="10px" fontWeight="900" color="red.500" textTransform="uppercase" mb={2}>At Start</Text>
+                                <Text fontSize="sm" fontWeight="700" color="gray.700" mb={2}>{item.initial_feelings || '—'}</Text>
+                                <EnergyTag value={item.initial_energy} />
                             </Box>
-                        )}
-
-                        <SimpleGrid columns={{ base: 1, md: 3 }} spacing={4} mb={6}>
-                            <Box bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl" p={5} backdropFilter="blur(14px)">
-                                <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase">
-                                    Total users
-                                </Text>
-                                <Text fontSize="3xl" fontWeight="900" letterSpacing="-1px" color={headingColor}>
-                                    {summary.total}
-                                </Text>
-                                <HStack spacing={2} mt={2}>
-                                    <Badge colorScheme="green" borderRadius="full">OK {summary.ok}</Badge>
-                                    <Badge colorScheme="red" borderRadius="full">Err {summary.err}</Badge>
+                            <Box p={4} borderRadius="xl" bg="green.50" borderWidth="1px" borderColor="green.100">
+                                <HStack justify="space-between" mb={2}>
+                                    <Text fontSize="10px" fontWeight="900" color="green.600" textTransform="uppercase">After Session</Text>
+                                    {improved && <FiArrowUp color="green" size={14} />}
                                 </HStack>
-                            </Box>
-                            <Box bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl" p={5} backdropFilter="blur(14px)">
-                                <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase">
-                                    Avg streak
-                                </Text>
-                                <Text fontSize="3xl" fontWeight="900" letterSpacing="-1px" color={headingColor}>
-                                    {summary.avgStreak}
-                                </Text>
-                                <Text color={muted} fontWeight="700" fontSize="sm">Across OK users</Text>
-                            </Box>
-                            <Box bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl" p={5} backdropFilter="blur(14px)">
-                                <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase">
-                                    Needs attention
-                                </Text>
-                                <Text fontSize="3xl" fontWeight="900" letterSpacing="-1px" color={headingColor}>
-                                    {summary.needsAttention}
-                                </Text>
-                                <HStack spacing={2} mt={2}>
-                                    <Badge colorScheme="red" borderRadius="full">High {summary.highRisk}</Badge>
-                                    <Badge colorScheme="orange" borderRadius="full">Med {Math.max(0, summary.needsAttention - summary.highRisk)}</Badge>
-                                </HStack>
+                                <Text fontSize="sm" fontWeight="700" color="gray.700" mb={2}>{item.final_feelings || '—'}</Text>
+                                <EnergyTag value={item.final_energy} />
                             </Box>
                         </SimpleGrid>
 
-                        <HStack spacing={2} mb={3} flexWrap="wrap">
-                            <Button
-                                size="sm"
-                                variant={statusFilter === 'all' ? 'solid' : 'outline'}
-                                colorScheme="teal"
-                                borderRadius="full"
-                                onClick={() => setStatusFilter('all')}
-                            >
-                                All
-                            </Button>
-                            <Button
-                                size="sm"
-                                variant={statusFilter === 'ok' ? 'solid' : 'outline'}
-                                colorScheme="green"
-                                borderRadius="full"
-                                onClick={() => setStatusFilter('ok')}
-                            >
-                                OK
-                            </Button>
-                            <Button
-                                size="sm"
-                                variant={statusFilter === 'error' ? 'solid' : 'outline'}
-                                colorScheme="red"
-                                borderRadius="full"
-                                onClick={() => setStatusFilter('error')}
-                            >
-                                Errors
-                            </Button>
-                            <Text fontSize="sm" color={muted} fontWeight="800" ml={{ base: 0, md: 2 }}>
-                                Showing {filteredRows.length} of {derivedRows.length}
-                            </Text>
+                        {item.mindset_shift && (
+                            <Box p={4} borderRadius="xl" bg="teal.50" borderWidth="1px" borderColor="teal.100">
+                                <Text fontSize="10px" fontWeight="900" color="teal.600" textTransform="uppercase" mb={1}>Mindset Shift</Text>
+                                <Text fontSize="sm" fontWeight="700" color="teal.900">{item.mindset_shift}</Text>
+                            </Box>
+                        )}
+
+                        {item.recommendations?.length > 0 && (
+                            <Box>
+                                <Text fontSize="10px" fontWeight="900" color="gray.500" textTransform="uppercase" mb={3}>Recommendations</Text>
+                                <VStack align="stretch" spacing={2}>
+                                    {item.recommendations.map((r, i) => (
+                                        <HStack key={i} p={3} borderRadius="lg" bg="gray.50" borderWidth="1px" borderColor="gray.100" spacing={3}>
+                                            <Circle size="6" bg="purple.100" flexShrink={0}>
+                                                <Text fontSize="10px" fontWeight="900" color="purple.600">{i + 1}</Text>
+                                            </Circle>
+                                            <Text fontSize="sm" fontWeight="600" color="gray.700">{r}</Text>
+                                        </HStack>
+                                    ))}
+                                </VStack>
+                            </Box>
+                        )}
+                    </VStack>
+                </ModalBody>
+            </ModalContent>
+        </Modal>
+    )
+}
+
+// ── Main Admin Page ────────────────────────────────────────────────────────────
+export function Admin() {
+    const bg = useColorModeValue('gray.50', 'gray.900')
+    const cardBg = useColorModeValue('white', 'gray.800')
+    const border = useColorModeValue('gray.100', 'whiteAlpha.100')
+    const muted = useColorModeValue('gray.500', 'gray.400')
+
+    const [stats, setStats] = useState(null)
+    const [users, setUsers] = useState([])
+    const [analyses, setAnalyses] = useState([])
+    const [loading, setLoading] = useState(true)
+    const [userSearch, setUserSearch] = useState('')
+    const [analysisSearch, setAnalysisSearch] = useState('')
+    const [selectedAnalysis, setSelectedAnalysis] = useState(null)
+    const [activeTab, setActiveTab] = useState('overview')
+    const { isOpen, onOpen, onClose } = useDisclosure()
+
+    const fetchAll = async () => {
+        setLoading(true)
+        try {
+            const [s, u, a] = await Promise.all([
+                fetch(`${API_BASE}/admin/stats`).then(r => r.json()),
+                fetch(`${API_BASE}/admin/users`).then(r => r.json()),
+                fetch(`${API_BASE}/admin/analyses`).then(r => r.json()),
+            ])
+            setStats(s)
+            setUsers(Array.isArray(u) ? u : [])
+            setAnalyses(Array.isArray(a) ? a : [])
+        } catch (e) {
+            console.error('Admin fetch failed', e)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    useEffect(() => { fetchAll() }, [])
+
+    const openAnalysis = (item) => { setSelectedAnalysis(item); onOpen() }
+
+    const filteredUsers = useMemo(() =>
+        users.filter(u =>
+            u.username?.toLowerCase().includes(userSearch.toLowerCase()) ||
+            u.email?.toLowerCase().includes(userSearch.toLowerCase())
+        ), [users, userSearch])
+
+    const filteredAnalyses = useMemo(() =>
+        analyses.filter(a =>
+            a.username?.toLowerCase().includes(analysisSearch.toLowerCase()) ||
+            a.core_problem?.toLowerCase().includes(analysisSearch.toLowerCase())
+        ), [analyses, analysisSearch])
+
+    const tabs = [
+        { id: 'overview', label: 'Overview', icon: FiBarChart2 },
+        { id: 'users', label: 'Users', icon: FiUser },
+        { id: 'analyses', label: 'Session Analyses', icon: FiTrendingUp },
+    ]
+
+    return (
+        <Box minH="100vh" bg={bg}>
+            {/* Header */}
+            <Box
+                bg={cardBg} borderBottomWidth="1px" borderColor={border}
+                px={{ base: 4, lg: 8 }} py={4} position="sticky" top={0} zIndex={10}
+                backdropFilter="blur(12px)"
+            >
+                <HStack justify="space-between" maxW="1400px" mx="auto">
+                    <HStack spacing={4}>
+                        <RouterLink to="/">
+                            <IconButton icon={<FiArrowLeft />} variant="ghost" size="sm" borderRadius="lg" aria-label="Back" />
+                        </RouterLink>
+                        <HStack spacing={2}>
+                            <Circle size="8" bg="purple.100">
+                                <FiBarChart2 color="#805AD5" size={16} />
+                            </Circle>
+                            <Box>
+                                <Heading size="sm" fontWeight="900" color="purple.800">Admin Dashboard</Heading>
+                                <Text fontSize="10px" color={muted} fontWeight="700">Serene · Mental Health Platform</Text>
+                            </Box>
+                        </HStack>
+                    </HStack>
+                    <Tooltip label="Refresh data">
+                        <IconButton
+                            icon={<FiRefreshCw size={15} />}
+                            variant="ghost" size="sm" borderRadius="lg"
+                            isLoading={loading}
+                            onClick={fetchAll}
+                            aria-label="Refresh"
+                        />
+                    </Tooltip>
+                </HStack>
+            </Box>
+
+            <Box maxW="1400px" mx="auto" px={{ base: 4, lg: 8 }} py={8}>
+                {loading && !stats ? (
+                    <Flex justify="center" align="center" h="60vh">
+                        <VStack spacing={4}>
+                            <Spinner size="xl" color="purple.500" thickness="3px" />
+                            <Text color={muted} fontWeight="600">Loading dashboard…</Text>
+                        </VStack>
+                    </Flex>
+                ) : (
+                    <VStack align="stretch" spacing={8}>
+
+                        {/* Tab bar */}
+                        <HStack spacing={1} bg={cardBg} p={1} borderRadius="xl" borderWidth="1px" borderColor={border} w="fit-content">
+                            {tabs.map(t => (
+                                <Button
+                                    key={t.id}
+                                    leftIcon={<t.icon size={14} />}
+                                    size="sm"
+                                    borderRadius="lg"
+                                    fontWeight="700"
+                                    variant={activeTab === t.id ? 'solid' : 'ghost'}
+                                    colorScheme={activeTab === t.id ? 'purple' : 'gray'}
+                                    onClick={() => setActiveTab(t.id)}
+                                >
+                                    {t.label}
+                                </Button>
+                            ))}
                         </HStack>
 
-                        <Box bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl" overflow="hidden" backdropFilter="blur(14px)">
-                            {isLoading && rows.length === 0 ? (
-                                <HStack spacing={3} py={16} justify="center">
-                                    <Spinner />
-                                    <Text color={muted} fontWeight="800">Loading metrics…</Text>
-                                </HStack>
-                            ) : (
-                                <Box overflowX="auto">
-                                    <Table size="sm">
-                                        <Thead position="sticky" top={0} zIndex={1} bg={tableHeaderBg} backdropFilter="blur(14px)">
-                                            <Tr>
-                                                <Th>User</Th>
-                                                <Th>Status</Th>
-                                                <Th>Risk</Th>
-                                                <Th>Mood</Th>
-                                                <Th isNumeric>Level</Th>
-                                                <Th isNumeric>XP</Th>
-                                                <Th isNumeric>Streak</Th>
-                                                <Th isNumeric>Active</Th>
-                                                <Th isNumeric>Tasks</Th>
-                                                <Th>Process age</Th>
-                                            </Tr>
-                                        </Thead>
-                                        <Tbody>
-                                            {filteredRows.map((r) => (
-                                                (() => {
-                                                    const riskInfo = riskBadgeProps(r?.analysis?.risk)
-                                                    const moodInfo = moodBadgeProps(r?.analysis?.mood)
-                                                    return (
-                                                <Tr
-                                                    key={r.username}
-                                                    cursor="pointer"
-                                                    _hover={{ bg: rowHoverBg }}
-                                                    onClick={() => openRow(r)}
-                                                >
-                                                    <Td>
-                                                        <VStack align="start" spacing={0}>
-                                                            <Text fontWeight="900" color={headingColor}>{r.username}</Text>
-                                                            {r?.user?.email && (
-                                                                <Text fontSize="xs" color={muted} fontWeight="700">
-                                                                    {asText(r.user.email)}
-                                                                </Text>
-                                                            )}
-                                                            {r?.analysis?.lastUserText && (
-                                                                <Text fontSize="xs" color={muted} fontWeight="700">
-                                                                    {truncate(r.analysis.lastUserText, 56)}
-                                                                </Text>
-                                                            )}
-                                                        </VStack>
-                                                    </Td>
-                                                    <Td>
-                                                        {r.ok ? (
-                                                            <Badge colorScheme="green" borderRadius="full">OK</Badge>
-                                                        ) : (
-                                                            <Badge colorScheme="red" borderRadius="full">ERROR</Badge>
-                                                        )}
-                                                    </Td>
-                                                    <Td>
-                                                        {r.ok ? (
-                                                            <Badge colorScheme={riskInfo.colorScheme} borderRadius="full">
-                                                                {riskInfo.label}
-                                                            </Badge>
-                                                        ) : (
-                                                            <Text color={muted} fontWeight="800">—</Text>
-                                                        )}
-                                                    </Td>
-                                                    <Td>
-                                                        {r.ok ? (
-                                                            <Badge colorScheme={moodInfo.colorScheme} borderRadius="full">
-                                                                {moodInfo.label}
-                                                            </Badge>
-                                                        ) : (
-                                                            <Text color={muted} fontWeight="800">—</Text>
-                                                        )}
-                                                    </Td>
-                                                    <Td isNumeric fontWeight="800">{r.ok ? r.level : '—'}</Td>
-                                                    <Td isNumeric fontWeight="800">{r.ok ? r.xp : '—'}</Td>
-                                                    <Td isNumeric fontWeight="800">{r.ok ? r.streak : '—'}</Td>
-                                                    <Td isNumeric fontWeight="800">{r.ok ? r.activeDays : '—'}</Td>
-                                                    <Td isNumeric fontWeight="800">{r.ok ? r.tasks : '—'}</Td>
-                                                    <Td>
-                                                        <Text fontWeight="800">{r.ok ? r.processAge : '—'}</Text>
-                                                    </Td>
-                                                </Tr>
-                                                    )
-                                                })()
-                                            ))}
-                                            {filteredRows.length === 0 && (
-                                                <Tr>
-                                                    <Td colSpan={8}>
-                                                        <VStack py={10} spacing={1}>
-                                                            <Text fontWeight="900" color={headingColor}>No users match your search.</Text>
-                                                            <Text color={muted} fontWeight="700" fontSize="sm">
-                                                                Try clearing filters or update `VITE_ADMIN_USERS`.
-                                                            </Text>
-                                                        </VStack>
-                                                    </Td>
-                                                </Tr>
-                                            )}
-                                        </Tbody>
-                                    </Table>
+                        {/* ── OVERVIEW ── */}
+                        {activeTab === 'overview' && stats && (
+                            <VStack align="stretch" spacing={6}>
+                                <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
+                                    <StatCard icon={FiUser} label="Total Users" value={stats.total_users} color="purple" />
+                                    <StatCard icon={FiMessageSquare} label="Total Messages" value={stats.total_messages} color="teal" />
+                                    <StatCard icon={FiBarChart2} label="Sessions Analyzed" value={stats.total_analyses} color="blue" />
+                                    <StatCard icon={FiArrowUp} label="Energy Improved" value={stats.improved_energy}
+                                        color="green" sub="sessions where energy went up" />
+                                </SimpleGrid>
+
+                                {/* Progress breakdown */}
+                                <Box bg={cardBg} p={6} borderRadius="2xl" borderWidth="1px" borderColor={border}>
+                                    <Text fontSize="xs" fontWeight="900" color={muted} textTransform="uppercase" mb={4}>
+                                        Session Progress Breakdown
+                                    </Text>
+                                    <HStack spacing={3} flexWrap="wrap">
+                                        {Object.entries(stats.progress_breakdown || {}).map(([k, v]) => (
+                                            <Box key={k} px={4} py={3} borderRadius="xl" bg={`${PROGRESS_COLOR[k] || 'gray'}.50`}
+                                                borderWidth="1px" borderColor={`${PROGRESS_COLOR[k] || 'gray'}.100`}>
+                                                <Text fontSize="2xl" fontWeight="900" color={`${PROGRESS_COLOR[k] || 'gray'}.700`}>{v}</Text>
+                                                <Text fontSize="xs" fontWeight="800" color={`${PROGRESS_COLOR[k] || 'gray'}.500`} textTransform="capitalize">{k}</Text>
+                                            </Box>
+                                        ))}
+                                        {!Object.keys(stats.progress_breakdown || {}).length && (
+                                            <Text color={muted} fontSize="sm">No analyses yet</Text>
+                                        )}
+                                    </HStack>
                                 </Box>
-                            )}
-                        </Box>
-                    </Container>
-                </Box>
-            </Flex>
 
-            <Drawer isOpen={isOpen} placement="right" onClose={onClose} size="md">
-                <DrawerOverlay />
-                <DrawerContent bg={drawerBg} maxW={{ base: '100%', md: '520px', lg: '580px' }}>
-                    <DrawerCloseButton />
-                    <DrawerHeader>
-                        <VStack align="start" spacing={1}>
-                            <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase">
-                                User
-                            </Text>
-                            <HStack spacing={2} align="center">
-                                <Heading size="md" letterSpacing="-0.4px">{selected?.username || '—'}</Heading>
-                                {selected?.ok && (
-                                    (() => {
-                                        const riskInfo = riskBadgeProps(selected?.analysis?.risk)
-                                        const moodInfo = moodBadgeProps(selected?.analysis?.mood)
-                                        return (
-                                            <>
-                                                <Badge colorScheme={riskInfo.colorScheme} borderRadius="full">{riskInfo.label} risk</Badge>
-                                                <Badge colorScheme={moodInfo.colorScheme} borderRadius="full">{moodInfo.label}</Badge>
-                                            </>
-                                        )
-                                    })()
-                                )}
-                            </HStack>
-                        </VStack>
-                    </DrawerHeader>
-                    <DrawerBody>
-                        {!selected ? (
-                            <Text color={muted} fontWeight="700">No user selected.</Text>
-                        ) : (
-                            <VStack align="stretch" spacing={4}>
-                                {!selected.ok && (
-                                    <Box p={4} bg={errorBg} borderWidth="1px" borderColor={errorBorder} borderRadius="2xl">
-                                        <Text fontWeight="900" color={errorText}>Failed to load</Text>
-                                        <Text color={errorText} fontSize="sm" fontWeight="700">
-                                            {selected.error}
-                                        </Text>
-                                    </Box>
-                                )}
-
-                                {selected.ok && (
-                                    <>
-                                        <Box p={4} bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl">
-                                            <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase" mb={2}>
-                                                Monitoring signals (heuristic)
-                                            </Text>
-                                            <VStack align="stretch" spacing={3}>
-                                                <HStack justify="space-between">
-                                                    <Text color={muted} fontWeight="800" fontSize="sm">Signal level</Text>
-                                                    <Text fontWeight="900">{safeNum(selected?.analysis?.score)}/100</Text>
-                                                </HStack>
-                                                <Box>
-                                                    <Box
-                                                        h="10px"
-                                                        borderRadius="full"
-                                                        bg={barTrackBg}
-                                                        overflow="hidden"
-                                                    >
-                                                        <Box
-                                                            h="100%"
-                                                            w={`${Math.max(0, Math.min(100, safeNum(selected?.analysis?.score)))}%`}
-                                                            bg={selected?.analysis?.risk === 'high' ? 'red.400' : (selected?.analysis?.risk === 'medium' ? 'orange.400' : 'green.400')}
-                                                        />
-                                                    </Box>
-                                                </Box>
-                                                {Array.isArray(selected?.analysis?.topKeywords) && selected.analysis.topKeywords.length > 0 && (
-                                                    <HStack spacing={2} flexWrap="wrap">
-                                                        {selected.analysis.topKeywords.map((k) => (
-                                                            <Badge key={k} borderRadius="full" colorScheme="purple">
-                                                                {k}
-                                                            </Badge>
-                                                        ))}
-                                                    </HStack>
-                                                )}
-                                                {Array.isArray(selected?.analysis?.recentUserHighlights) && selected.analysis.recentUserHighlights.length > 0 && (
+                                {/* Recent analyses preview */}
+                                <Box bg={cardBg} p={6} borderRadius="2xl" borderWidth="1px" borderColor={border}>
+                                    <HStack justify="space-between" mb={4}>
+                                        <Text fontSize="xs" fontWeight="900" color={muted} textTransform="uppercase">Recent Sessions</Text>
+                                        <Button size="xs" variant="ghost" colorScheme="purple" fontWeight="700"
+                                            onClick={() => setActiveTab('analyses')}>View All</Button>
+                                    </HStack>
+                                    <VStack align="stretch" spacing={2}>
+                                        {analyses.slice(0, 5).map(a => (
+                                            <HStack key={a.id} p={3} borderRadius="xl" bg="gray.50"
+                                                borderWidth="1px" borderColor="gray.100"
+                                                cursor="pointer" _hover={{ bg: 'purple.50', borderColor: 'purple.100' }}
+                                                onClick={() => openAnalysis(a)} justify="space-between">
+                                                <HStack spacing={3}>
+                                                    <Avatar size="xs" name={a.username} bg="purple.200" />
                                                     <Box>
-                                                        <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase" mb={2}>
-                                                            Recent user highlights
+                                                        <Text fontSize="sm" fontWeight="800" color="gray.800" noOfLines={1}>
+                                                            {a.core_problem || 'No problem identified'}
                                                         </Text>
-                                                        <VStack align="stretch" spacing={2}>
-                                                            {selected.analysis.recentUserHighlights.map((t, idx) => (
-                                                                <Box key={idx} p={3} borderRadius="xl" bg={highlightBg} borderWidth="1px" borderColor={border}>
-                                                                    <Text fontSize="sm" fontWeight="800" color={headingColor} whiteSpace="pre-wrap">
-                                                                        {t}
-                                                                    </Text>
-                                                                </Box>
-                                                            ))}
-                                                        </VStack>
+                                                        <Text fontSize="xs" color={muted}>{a.username} · {fmt(a.analyzed_at)}</Text>
                                                     </Box>
-                                                )}
-                                            </VStack>
-                                        </Box>
-
-                                        <SimpleGrid columns={2} spacing={3}>
-                                            <Box p={4} bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl">
-                                                <Stat>
-                                                    <StatLabel color={muted}>Level</StatLabel>
-                                                    <StatNumber>{selected.level}</StatNumber>
-                                                </Stat>
-                                            </Box>
-                                            <Box p={4} bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl">
-                                                <Stat>
-                                                    <StatLabel color={muted}>XP</StatLabel>
-                                                    <StatNumber>{selected.xp}</StatNumber>
-                                                </Stat>
-                                            </Box>
-                                            <Box p={4} bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl">
-                                                <Stat>
-                                                    <StatLabel color={muted}>Streak</StatLabel>
-                                                    <StatNumber>{selected.streak}</StatNumber>
-                                                </Stat>
-                                            </Box>
-                                            <Box p={4} bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl">
-                                                <Stat>
-                                                    <StatLabel color={muted}>Tasks</StatLabel>
-                                                    <StatNumber>{selected.tasks}</StatNumber>
-                                                </Stat>
-                                            </Box>
-                                        </SimpleGrid>
-
-                                        <Box p={4} bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl">
-                                            <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase" mb={2}>
-                                                Details
-                                            </Text>
-                                            <VStack align="stretch" spacing={2}>
-                                                <HStack justify="space-between">
-                                                    <Text color={muted} fontWeight="800" fontSize="sm">Active days</Text>
-                                                    <Text fontWeight="900">{selected.activeDays}</Text>
                                                 </HStack>
-                                                <HStack justify="space-between">
-                                                    <Text color={muted} fontWeight="800" fontSize="sm">Process age</Text>
-                                                    <Text fontWeight="900">{selected.processAge}</Text>
+                                                <HStack spacing={2}>
+                                                    <EnergyTag value={a.initial_energy} />
+                                                    <FiArrowUp size={12} color="gray" />
+                                                    <EnergyTag value={a.final_energy} />
                                                 </HStack>
-                                                {selected?.user?.email && (
-                                                    <HStack justify="space-between">
-                                                        <Text color={muted} fontWeight="800" fontSize="sm">Email</Text>
-                                                        <Text fontWeight="900">{asText(selected.user.email)}</Text>
-                                                    </HStack>
-                                                )}
-                                            </VStack>
-                                        </Box>
-
-                                        <Box p={4} bg={cardBg} borderWidth="1px" borderColor={border} borderRadius="2xl">
-                                            <Text fontSize="xs" color={muted} fontWeight="900" letterSpacing="0.12em" textTransform="uppercase" mb={2}>
-                                                Recent chat log
+                                            </HStack>
+                                        ))}
+                                        {!analyses.length && (
+                                            <Text color={muted} fontSize="sm" textAlign="center" py={4}>
+                                                No session analyses yet.
                                             </Text>
-                                            <Box maxH="320px" overflowY="auto" pr={2}>
-                                                <VStack align="stretch" spacing={2}>
-                                                    {(selected?.analysis?.normalized || []).slice(-30).map((m, idx) => (
-                                                        <Box
-                                                            key={`${idx}-${m.sender}`}
-                                                            p={3}
-                                                            borderRadius="xl"
-                                                            borderWidth="1px"
-                                                            borderColor={border}
-                                                            bg={m.sender === 'oracle' ? chatOracleBg : chatUserBg}
-                                                        >
-                                                            <HStack justify="space-between" mb={1}>
-                                                                <Badge borderRadius="full" colorScheme={m.sender === 'oracle' ? 'teal' : 'gray'}>
-                                                                    {m.sender === 'oracle' ? 'Oracle' : 'User'}
-                                                                </Badge>
-                                                                {m.createdAt && (
-                                                                    <Text fontSize="xs" color={muted} fontWeight="700">
-                                                                        {truncate(m.createdAt, 28)}
-                                                                    </Text>
-                                                                )}
-                                                            </HStack>
-                                                            <Text fontSize="sm" fontWeight="700" color={headingColor} whiteSpace="pre-wrap">
-                                                                {m.text}
-                                                            </Text>
-                                                        </Box>
-                                                    ))}
-                                                </VStack>
-                                            </Box>
-                                        </Box>
-
-                                        <Button as={RouterLink} to="/" variant="outline" colorScheme="teal" borderRadius="xl">
-                                            Back to chat
-                                        </Button>
-                                    </>
-                                )}
+                                        )}
+                                    </VStack>
+                                </Box>
                             </VStack>
                         )}
-                    </DrawerBody>
-                </DrawerContent>
-            </Drawer>
+
+                        {/* ── USERS ── */}
+                        {activeTab === 'users' && (
+                            <VStack align="stretch" spacing={4}>
+                                <InputGroup maxW="380px">
+                                    <InputLeftElement pointerEvents="none">
+                                        <FiSearch color="gray" size={14} />
+                                    </InputLeftElement>
+                                    <Input
+                                        placeholder="Search users…"
+                                        value={userSearch}
+                                        onChange={e => setUserSearch(e.target.value)}
+                                        bg={cardBg} borderRadius="xl" fontWeight="600" fontSize="sm"
+                                    />
+                                </InputGroup>
+
+                                <SimpleGrid columns={{ base: 1, md: 2, xl: 3 }} spacing={4}>
+                                    {filteredUsers.map(u => (
+                                        <Box key={u.username} bg={cardBg} p={5} borderRadius="2xl"
+                                            borderWidth="1px" borderColor={border} boxShadow="sm"
+                                            _hover={{ borderColor: 'purple.200', boxShadow: 'md' }} transition="all 0.15s">
+                                            <HStack spacing={3} mb={4}>
+                                                <Avatar size="md" name={u.username} bg="purple.200" color="purple.800" />
+                                                <Box flex={1}>
+                                                    <Text fontWeight="900" color="gray.800">{u.username}</Text>
+                                                    <Text fontSize="xs" color={muted}>{u.email || 'No email'}</Text>
+                                                </Box>
+                                                <Badge colorScheme="purple" borderRadius="full" fontWeight="800">
+                                                    Lv {u.level}
+                                                </Badge>
+                                            </HStack>
+                                            <Divider mb={4} />
+                                            <SimpleGrid columns={3} spacing={2}>
+                                                <Box textAlign="center">
+                                                    <HStack justify="center" spacing={1} mb={1}>
+                                                        <FiZap size={12} color="#805AD5" />
+                                                        <Text fontSize="lg" fontWeight="900" color="purple.700">{u.xp}</Text>
+                                                    </HStack>
+                                                    <Text fontSize="9px" fontWeight="800" color={muted} textTransform="uppercase">XP</Text>
+                                                </Box>
+                                                <Box textAlign="center">
+                                                    <HStack justify="center" spacing={1} mb={1}>
+                                                        <FiMessageSquare size={12} color="#319795" />
+                                                        <Text fontSize="lg" fontWeight="900" color="teal.600">{u.total_messages}</Text>
+                                                    </HStack>
+                                                    <Text fontSize="9px" fontWeight="800" color={muted} textTransform="uppercase">Messages</Text>
+                                                </Box>
+                                                <Box textAlign="center">
+                                                    <HStack justify="center" spacing={1} mb={1}>
+                                                        <FiBarChart2 size={12} color="#3182CE" />
+                                                        <Text fontSize="lg" fontWeight="900" color="blue.500">{u.total_analyses}</Text>
+                                                    </HStack>
+                                                    <Text fontSize="9px" fontWeight="800" color={muted} textTransform="uppercase">Analyses</Text>
+                                                </Box>
+                                            </SimpleGrid>
+                                            <Text fontSize="9px" color={muted} mt={3} textAlign="right">
+                                                Joined {fmt(u.created_at)}
+                                            </Text>
+                                        </Box>
+                                    ))}
+                                    {!filteredUsers.length && (
+                                        <Text color={muted} fontSize="sm" gridColumn="1/-1" textAlign="center" py={8}>
+                                            No users found.
+                                        </Text>
+                                    )}
+                                </SimpleGrid>
+                            </VStack>
+                        )}
+
+                        {/* ── ANALYSES ── */}
+                        {activeTab === 'analyses' && (
+                            <VStack align="stretch" spacing={4}>
+                                <InputGroup maxW="380px">
+                                    <InputLeftElement pointerEvents="none">
+                                        <FiSearch color="gray" size={14} />
+                                    </InputLeftElement>
+                                    <Input
+                                        placeholder="Search by user or problem…"
+                                        value={analysisSearch}
+                                        onChange={e => setAnalysisSearch(e.target.value)}
+                                        bg={cardBg} borderRadius="xl" fontWeight="600" fontSize="sm"
+                                    />
+                                </InputGroup>
+
+                                <VStack align="stretch" spacing={3}>
+                                    {filteredAnalyses.map(a => (
+                                        <Box
+                                            key={a.id} bg={cardBg} p={5} borderRadius="2xl"
+                                            borderWidth="1px" borderColor={border}
+                                            cursor="pointer" transition="all 0.15s"
+                                            _hover={{ borderColor: 'purple.200', boxShadow: 'md', transform: 'translateY(-1px)' }}
+                                            onClick={() => openAnalysis(a)}
+                                        >
+                                            <Grid templateColumns={{ base: '1fr', md: '1fr auto' }} gap={4}>
+                                                <Box>
+                                                    <HStack spacing={2} mb={2} flexWrap="wrap">
+                                                        <Avatar size="xs" name={a.username} bg="purple.100" />
+                                                        <Text fontSize="sm" fontWeight="800" color="gray.600">{a.username}</Text>
+                                                        <Text fontSize="xs" color={muted}>{fmt(a.analyzed_at)}</Text>
+                                                        <Badge colorScheme={PROGRESS_COLOR[a.progress_made] || 'gray'}
+                                                            borderRadius="full" fontSize="10px">
+                                                            {a.progress_made || 'unknown'}
+                                                        </Badge>
+                                                    </HStack>
+                                                    <Text fontWeight="800" color="gray.800" mb={2} noOfLines={2}>
+                                                        {a.core_problem || 'No problem identified'}
+                                                    </Text>
+                                                    {a.mindset_shift && (
+                                                        <Text fontSize="sm" color={muted} noOfLines={1}>
+                                                            💡 {a.mindset_shift}
+                                                        </Text>
+                                                    )}
+                                                </Box>
+                                                <VStack align="flex-end" justify="center" spacing={2} minW="160px">
+                                                    <HStack spacing={2}>
+                                                        <Box textAlign="center">
+                                                            <Text fontSize="9px" fontWeight="800" color={muted} textTransform="uppercase" mb={1}>Start</Text>
+                                                            <EnergyTag value={a.initial_energy} />
+                                                        </Box>
+                                                        <FiArrowUp size={14} color="#805AD5" />
+                                                        <Box textAlign="center">
+                                                            <Text fontSize="9px" fontWeight="800" color={muted} textTransform="uppercase" mb={1}>End</Text>
+                                                            <EnergyTag value={a.final_energy} />
+                                                        </Box>
+                                                    </HStack>
+                                                    {a.recommendations?.length > 0 && (
+                                                        <Text fontSize="10px" color="purple.500" fontWeight="700">
+                                                            {a.recommendations.length} recommendation{a.recommendations.length > 1 ? 's' : ''}
+                                                        </Text>
+                                                    )}
+                                                </VStack>
+                                            </Grid>
+                                        </Box>
+                                    ))}
+                                    {!filteredAnalyses.length && (
+                                        <Box textAlign="center" py={12}>
+                                            <FiBarChart2 size={32} color="gray" style={{ margin: '0 auto 12px' }} />
+                                            <Text color={muted} fontWeight="600">No session analyses found.</Text>
+                                            <Text fontSize="sm" color={muted}>End a conversation to generate an analysis.</Text>
+                                        </Box>
+                                    )}
+                                </VStack>
+                            </VStack>
+                        )}
+
+                    </VStack>
+                )}
+            </Box>
+
+            <AnalysisModal item={selectedAnalysis} isOpen={isOpen} onClose={onClose} />
         </Box>
     )
 }

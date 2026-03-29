@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { MentalHealthStats } from '../components/MentalHealthStats'
 import {
     Box,
     Container,
@@ -1055,24 +1056,10 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
 
 	                            {/* STATS TAB */}
 	                            <TabPanel p={0}>
-                                {/* Overall Progress */}
-                                <SimpleGrid columns={{ base: 1, md: 3 }} spacing={4} mb={8}>
-                                    <Box bg={cardBg} p={6} borderRadius="2xl" shadow="sm" textAlign="center" border="1px solid" borderColor="orange.100">
-                                        <Text fontSize="3xl" fontWeight="900" color="orange.500">🔥 {progress.streak}</Text>
-                                        <Text fontSize="xs" fontWeight="800" color="gray.500" textTransform="uppercase">Day Streak</Text>
-                                    </Box>
-                                    <Box bg={cardBg} p={6} borderRadius="2xl" shadow="sm" textAlign="center" border="1px solid" borderColor="blue.100">
-                                        <Text fontSize="3xl" fontWeight="900" color="blue.500">{progress.total_days_active}</Text>
-                                        <Text fontSize="xs" fontWeight="800" color="gray.500" textTransform="uppercase">Days Active</Text>
-                                    </Box>
-                                    <Box bg={cardBg} p={6} borderRadius="2xl" shadow="sm" textAlign="center" border="1px solid" borderColor="green.100">
-                                        <Text fontSize="3xl" fontWeight="900" color="green.500">{progress.total_tasks_completed}</Text>
-                                        <Text fontSize="xs" fontWeight="800" color="gray.500" textTransform="uppercase">Total Completions</Text>
-                                    </Box>
-                                </SimpleGrid>
+                                
 
                                 {/* Daily History Chart */}
-                                {progress.history.length > 0 && (
+                                {progress.history?.length > 0 && (
                                     <Box bg={cardBg} p={6} borderRadius="3xl" shadow="md" border="1px solid" borderColor="gray.50" mb={8}>
                                         <Heading size="sm" mb={4}>Daily Completion History (last 30 days)</Heading>
                                         <Box h="180px">
@@ -1095,29 +1082,18 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                     </Box>
                                 )}
 
-                                <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8}>
-                                    <Box bg={cardBg} p={8} borderRadius="3xl" shadow="lg" border="1px solid" borderColor="gray.50">
-                                        <Heading size="md" mb={8}>Character Vitals</Heading>
-                                        <Box h="300px" w="full">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <RadarChart cx="50%" cy="50%" outerRadius="80%" data={statsRadarData}>
-                                                    <PolarGrid stroke="#EDF2F7" />
-                                                    <PolarAngleAxis dataKey="subject" tick={{ fontSize: 10, fontWeight: 700, fill: '#A0AEC0' }} />
-                                                    <Radar name="Agent" dataKey="A" stroke="#4C51BF" fill="#4C51BF" fillOpacity={0.6} />
-                                                </RadarChart>
-                                            </ResponsiveContainer>
-                                        </Box>
-                                    </Box>
-                                    <VStack spacing={6} align="stretch" bg={cardBg} p={8} borderRadius="3xl" shadow="xl">
-                                        <Heading size="md" mb={4}>Efficiency Vectors</Heading>
-                                        {statsRadarData.map((s, i) => (
-                                            <Box key={i} flex={1}>
-                                                <HStack justify="space-between" mb={2}><Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">{s.subject}</Text><Text fontSize="xs" fontWeight="900" color="blue.500">{s.A}%</Text></HStack>
-                                                <Progress value={s.A} colorScheme="blue" size="xs" borderRadius="full" />
-                                            </Box>
-                                        ))}
-                                    </VStack>
-	                                </SimpleGrid>
+                        
+
+                                {/* ── Mental Health Insights ── */}
+                                <Box mt={8}>
+                                    <HStack spacing={2} mb={5}>
+                                        <Box w="3px" h="18px" bg="teal.400" borderRadius="full" />
+                                        <Text fontWeight="900" fontSize="sm" color="teal.700" textTransform="uppercase" letterSpacing="wider">
+                                            Mental Health Insights
+                                        </Text>
+                                    </HStack>
+                                    <MentalHealthStats apiBase={API_BASE} username={USERNAME} />
+                                </Box>
 	                            </TabPanel>
 
 	                            {/* PROFILE TAB */}
