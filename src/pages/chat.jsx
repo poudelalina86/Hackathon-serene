@@ -161,6 +161,53 @@ const normalizeOracleText = (text) => {
     return String(cleaned || '').trim()
 }
 
+function SereneMark({ size = 40 }) {
+    return (
+        <Circle
+            size={`${size}px`}
+            bgGradient="radial-gradient(circle at 30% 25%, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.10) 26%, rgba(255,255,255,0) 55%), linear-gradient(135deg, #0d9488 0%, #14b8a6 52%, #22d3ee 100%)"
+            boxShadow="0 14px 28px rgba(13,148,136,0.22), 0 10px 18px rgba(34,211,238,0.14)"
+            borderWidth="1px"
+            borderColor="whiteAlpha.800"
+            position="relative"
+            overflow="hidden"
+        >
+            <Circle position="absolute" inset="3px" borderWidth="1px" borderColor="whiteAlpha.500" />
+            <Box position="absolute" inset="0" bgGradient="linear(to-b, whiteAlpha.300, transparent 55%)" opacity={0.55} />
+            <Box
+                as="svg"
+                width={`${Math.round(size * 0.66)}px`}
+                height={`${Math.round(size * 0.66)}px`}
+                viewBox="0 0 64 64"
+                fill="none"
+                aria-hidden="true"
+            >
+                {/* Flowing "S" wave mark (calm/premium) */}
+                <path
+                    d="M44 18c-5-5-14-6-20-2-4 3-3 8 2 10l8 3c9 3 8 13-1 16-7 3-16 1-21-4"
+                    stroke="rgba(255,255,255,0.94)"
+                    strokeWidth="5.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+                <path
+                    d="M44 18c-5-5-14-6-20-2-4 3-3 8 2 10l8 3c9 3 8 13-1 16-7 3-16 1-21-4"
+                    stroke="rgba(255,255,255,0.35)"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+                {/* small sparkle */}
+                <path
+                    d="M48 28l2 4 4 2-4 2-2 4-2-4-4-2 4-2 2-4Z"
+                    fill="rgba(255,255,255,0.9)"
+                    opacity="0.9"
+                />
+            </Box>
+        </Circle>
+    )
+}
+
 export function Chat() {
     const bg = useColorModeValue('gray.50', 'gray.900')
     const cardBg = useColorModeValue('white', 'gray.800')
@@ -590,17 +637,17 @@ export function Chat() {
                             onClick={() => {
                                 setSidebarView('chat')
                                 setActivePanel(null)
-                            }}
-                            spacing={3}
-                            mb={6}
-                            w="full"
-                            textAlign="left"
-                            _hover={{ opacity: 0.92 }}
-                            _active={{ opacity: 0.85 }}
-                        >
-                            <Avatar size="md" src="/avatar.png" name="Serene" />
-                            <VStack align="start" spacing={0}>
-                                <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
+                        }}
+                        spacing={3}
+                        mb={6}
+                        w="full"
+                        textAlign="left"
+                        _hover={{ opacity: 0.92 }}
+                        _active={{ opacity: 0.85 }}
+                    >
+                        <SereneMark size={44} />
+                        <VStack align="start" spacing={0}>
+                            <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
                             <Heading
                                 size="sm"
                                 fontWeight="700"
@@ -880,13 +927,13 @@ export function Chat() {
                     borderBottomColor={borderColor}
                     justify="space-between"
                 >
-                    <HStack w="full" maxW="980px" mx="auto" justify="space-between">
-                        <HStack spacing={3}>
-                            <Avatar size="md" src="/avatar.png" name="Serene" border="2px solid" borderColor="teal.200" />
-                            <Circle size="3" bg="teal.400" className="pulse-animation" />
-                            <Heading
-                                size="md"
-                                fontWeight="900"
+	                    <HStack w="full" maxW="980px" mx="auto" justify="space-between">
+	                        <HStack spacing={3}>
+	                            <SereneMark size={44} />
+	                            <Circle size="3" bg="teal.400" className="pulse-animation" />
+	                            <Heading
+	                                size="md"
+	                                fontWeight="900"
                                 letterSpacing="-0.2px"
                                 color="teal.600"
                                 sx={{
