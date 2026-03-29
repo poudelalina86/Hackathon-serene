@@ -414,18 +414,16 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
 
             setMessages(prev => [...prev, { kind: 'text', text: response.message, sender: 'oracle' }])
 
-            if (['schedule_task', 'edit_task', 'delete_task'].includes(response.action)) {
-                const tasksRes = await fetch(`${API_BASE}/tasks/${USERNAME}`)
-                const tasksData = await tasksRes.json()
-                setCustomTasks(tasksData.filter(t => t.is_custom))
-                if (tabIndex === 0) {
-                    setActiveQuest(tasksData.find(t => !t.completed) || activeQuest)
-                }
-            } else if (response.action === 'add_xp') {
-                const userRes = await fetch(`${API_BASE}/user/${USERNAME}`)
-                const userData = await userRes.json()
-                setXp(userData.xp)
-                setLevel(userData.level)
+            // Always refresh after any Oracle reply — tool calls update the DB regardless of the
+            // `action` field value (the Oracle confirms in natural language; action stays "none").
+            try {
+                const planRes = await fetch(`${API_BASE}/daily/${USERNAME}/plan`)
+                const planData = await planRes.json()
+                planData.sort((a, b) => a.time.localeCompare(b.time))
+                setSchedule({ fixed: planData.filter(t => !t.is_custom), flexible: [] })
+                setCustomTasks(planData.filter(t => t.is_custom))
+            } catch (refreshErr) {
+                console.warn('Post-reply task refresh failed:', refreshErr)
             }
         } catch (err) {
             console.error("Chat Error:", err)

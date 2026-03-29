@@ -186,6 +186,10 @@ export function Chat() {
     const [isThinking, setIsThinking] = useState(false)
     const [isVoiceRecording, setIsVoiceRecording] = useState(false)
 
+    // Live task state for schedule-change detection
+    const [tasks, setTasks] = useState([])
+    const tasksSnapshotRef = useRef(null)
+
     const [sessions, setSessions] = useState([])
     const [isSessionsLoading, setIsSessionsLoading] = useState(false)
 
@@ -375,6 +379,35 @@ export function Chat() {
         restoreOrStartSession()
     }, [])
 
+    // Fetch the task list and detect schedule changes after every Oracle reply
+    const refreshTasksAndDetectChange = async () => {
+        try {
+            const res = await fetch(`${API_BASE}/tasks/${USERNAME}`)
+            if (!res.ok) return
+            const freshTasks = await res.json()
+            const freshKeys = JSON.stringify(
+                (Array.isArray(freshTasks) ? freshTasks : []).map(t => `${t.time}:${t.activity}`).sort()
+            )
+            setTasks(Array.isArray(freshTasks) ? freshTasks : [])
+
+            if (tasksSnapshotRef.current !== null && tasksSnapshotRef.current !== freshKeys) {
+                // Schedule changed — inject a system notice into the chat
+                setMessages(prev => [
+                    ...prev,
+                    {
+                        id: `schedule-update-${Date.now()}`,
+                        kind: 'text',
+                        text: '🗓 Schedule Updated',
+                        sender: 'system',
+                    },
+                ])
+            }
+            tasksSnapshotRef.current = freshKeys
+        } catch (e) {
+            console.warn('Task refresh failed:', e)
+        }
+    }
+
     const sendMessageText = async (text) => {
         const userMsg = (text || '').trim()
         if (!userMsg) return
@@ -383,106 +416,32 @@ export function Chat() {
         setMessages(prev => [...prev, { kind: 'text', text: userMsg, sender: 'user' }])
         setIsThinking(true)
         try {
-            const res = await fetch(CHAT_COMPLETIONS_URL, {
+            // Use the structured chat endpoint that runs the full tool-execution loop
+            const res = await fetch(`${API_BASE}/chat/${USERNAME}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    messages: [{ role: 'user', content: userMsg }],
+                    user_input: userMsg,
                     conversation_id: conversationIdRef.current,
-                    stream: false,
                 })
             })
-            const contentType = (res.headers.get('content-type') || '').toLowerCase()
+
             if (!res.ok) {
-                let detail = ''
-                if (contentType.includes('application/json')) {
-                    const errJson = await res.json().catch(() => null)
-                    detail = errJson?.detail || errJson?.error?.message || ''
-                } else {
-                    detail = await res.text().catch(() => '')
-                }
-                throw new Error(detail || `HTTP ${res.status}`)
+                const errJson = await res.json().catch(() => null)
+                const detail = errJson?.detail || `HTTP ${res.status}`
+                throw new Error(detail)
             }
 
-            const extractOracleTextFromJson = (json) => {
-                if (!json) return ''
-                return (
-                    json?.choices?.[0]?.message?.content ||
-                    json?.choices?.[0]?.delta?.content ||
-                    json?.choices?.[0]?.text ||
-                    json?.message ||
-                    json?.oracle_response ||
-                    json?.response ||
-                    json?.content ||
-                    ''
-                )
-            }
+            const response = await res.json().catch(() => ({}))
+            // The /api/v1/chat endpoint always returns a ChatResponse with a `message` field.
+            const oracleText = response?.message || response?.oracle_response || response?.content || '(No response)'
+            setMessages(prev => [
+                ...prev,
+                { id: oracleMsgId, kind: 'text', text: String(oracleText).trim() || '(No response)', sender: 'oracle' },
+            ])
 
-            // Some backends return SSE even when stream=false; handle both.
-            if (contentType.includes('text/event-stream')) {
-                let acc = ''
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: '', sender: 'oracle' }])
-
-                const reader = res.body?.getReader?.()
-                if (!reader) throw new Error('Streaming response has no reader')
-
-                const decoder = new TextDecoder('utf-8')
-                let buffer = ''
-                while (true) {
-                    const { value, done } = await reader.read()
-                    if (done) break
-
-                    buffer += decoder.decode(value, { stream: true })
-                    const parts = buffer.split('\n\n')
-                    buffer = parts.pop() || ''
-
-                    for (const part of parts) {
-                        const lines = part.split('\n').map(l => l.trim()).filter(Boolean)
-                        for (const line of lines) {
-                            if (!line.startsWith('data:')) continue
-                            const payload = line.slice(5).trim()
-                            if (!payload || payload === '[DONE]') continue
-                            try {
-                                const evt = JSON.parse(payload)
-                                const delta =
-                                    evt?.choices?.[0]?.delta?.content ||
-                                    evt?.choices?.[0]?.message?.content ||
-                                    evt?.content ||
-                                    ''
-                                if (delta) {
-                                    acc += delta
-                                    setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: acc } : m)))
-                                }
-                            } catch {
-                                // ignore malformed chunks
-                            }
-                        }
-                    }
-                }
-
-                if (!acc.trim()) {
-                    setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: '(No response)' } : m)))
-                } else {
-                    const finalText = normalizeOracleText(acc)
-                    if (finalText !== acc) {
-                        setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: finalText } : m)))
-                    }
-                }
-            } else if (contentType.includes('application/json')) {
-                const response = await res.json().catch(() => ({}))
-                const oracleText = extractOracleTextFromJson(response)
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText(oracleText || '(No response)'), sender: 'oracle' }])
-            } else {
-                const raw = await res.text().catch(() => '')
-                let oracleText = raw
-                try {
-                    const maybeJson = JSON.parse(raw)
-                    oracleText = extractOracleTextFromJson(maybeJson) || raw
-                } catch {
-                    // keep raw
-                }
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText((oracleText || '').trim() || '(No response)'), sender: 'oracle' }])
-            }
+            // Always refresh tasks after every reply — Serene may have called a tool
+            await refreshTasksAndDetectChange()
         } catch (e) {
             console.error('Chat error:', e)
             const msg = e?.message ? String(e.message) : 'Failed to get a reply.'
@@ -941,7 +900,27 @@ export function Chat() {
                         </VStack>
                     ) : (
                         <VStack spacing={4} align="stretch">
-                            {messages.map((m, i) => (
+                            {messages.map((m, i) => {
+                                if (m.sender === 'system') {
+                                    return (
+                                        <Box key={m.id || i} display="flex" justifyContent="center" my={2}>
+                                            <Badge
+                                                colorScheme="teal"
+                                                variant="subtle"
+                                                px={3}
+                                                py={1}
+                                                borderRadius="full"
+                                                textTransform="none"
+                                                fontSize="xs"
+                                                fontWeight="800"
+                                            >
+                                                {m.text}
+                                            </Badge>
+                                        </Box>
+                                    )
+                                }
+
+                                return (
                                 <Box key={m.id || i} display="flex" justifyContent={m.sender === 'user' ? 'flex-end' : 'flex-start'}>
                                     {m.kind === 'voice' ? (
                                         <Box
@@ -991,7 +970,8 @@ export function Chat() {
                                         })()
                                     )}
                                 </Box>
-                            ))}
+                                )
+                            })}
 
                             {isThinking && (
                                 <HStack
