@@ -693,7 +693,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
             // Notification Trigger
             incompleteTasks.forEach(task => {
                 if (task.time === currentStr && !notifiedTasks.current.has(task.time)) {
-                    showLocalNotification(`Mission: ${task.activity}`, "Sector priority updated. Deployment recommended via Oracle HUD.");
+                    showLocalNotification(`Mission: ${task.activity}`, "Sector priority updated. Deployment recommended via Serene HUD.");
                     playMissionSound();
                     notifiedTasks.current.add(task.time);
                 }
@@ -1160,7 +1160,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                 </Container>
             </Box>
 
-            {/* Oracle HUD Launcher */}
+            {/* Serene HUD Launcher */}
             {!embedded && <OracleAvatarLauncher onClick={onOracleOpen} />}
 
             {/* Nav Footer (Mobile) */}
@@ -1195,7 +1195,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                                 <HStack>
                                     <Avatar size="sm" src="/avatar.png" name="Oracle" border="2px solid" borderColor="green.300" />
                                     <Circle size="3" bg="green.400" className="pulse-animation" />
-                                    <Heading size="md" fontWeight="900">Oracle HUD</Heading>
+                                    <Heading size="md" fontWeight="900">Serene HUD</Heading>
                                 </HStack>
                                 <IconButton
                                     icon={<FiX />}
@@ -1336,7 +1336,7 @@ export function Home({ embedded = false, initialTabIndex = 0 }) {
                         <HStack>
                             <Avatar size="sm" src="/avatar.png" name="Oracle" border="2px solid" borderColor="green.300" />
                             <Circle size="3" bg="green.400" className="pulse-animation" />
-                            <Heading size="md" fontWeight="900">Oracle HUD</Heading>
+                            <Heading size="md" fontWeight="900">Serene HUD</Heading>
                         </HStack>
                         <IconButton
                             icon={<FiX />}

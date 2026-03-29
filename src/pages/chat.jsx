@@ -26,7 +26,7 @@ import {
     VStack,
     useColorModeValue,
 } from '@chakra-ui/react'
-import { FiBarChart2, FiClock, FiMessageSquare, FiSend, FiZap, FiUser, FiSave } from 'react-icons/fi'
+import { FiBarChart2, FiClock, FiMessageSquare, FiSend, FiZap, FiUser, FiSave, FiRefreshCw } from 'react-icons/fi'
 import { VoiceRecorderButton } from '../components/VoiceRecorderButton'
 import { VoiceMessageBubble } from '../components/VoiceMessageBubble'
 import { OracleStructuredReply } from '../components/OracleStructuredReply'
@@ -48,21 +48,24 @@ const toServerBase = (raw) => {
 const SERVER_BASE = toServerBase(RAW_BASE)
 const API_BASE = `${SERVER_BASE}/api/v1`
 const CHAT_SERVER_BASE = toServerBase(import.meta.env["VITE_CHAT_SERVER_URL"] || SERVER_BASE)
-const CHAT_COMPLETIONS_URL = import.meta.env.DEV
-    ? '/v1/chat/completions'
-    : `${CHAT_SERVER_BASE}/v1/chat/completions`
-const SESSION_NEW_URL = import.meta.env.DEV
-    ? '/v1/session/new'
-    : `${CHAT_SERVER_BASE}/v1/session/new`
-const SESSION_END_URL = import.meta.env.DEV
-    ? '/v1/session/end'
-    : `${CHAT_SERVER_BASE}/v1/session/end`
+const CHAT_COMPLETIONS_URL = `${CHAT_SERVER_BASE}/v1/chat/completions`
+const SESSION_NEW_URL = `${CHAT_SERVER_BASE}/v1/session/new`
+const SESSION_END_URL = `${CHAT_SERVER_BASE}/v1/session/end`
 const USERNAME = "incri"
+
+const LAST_SESSION_KEY = `serene:lastSession:${USERNAME}`
+const sessionCacheKey = (sessionId) => `serene:sessionCache:${USERNAME}:${sessionId}`
 
 const formatSeconds = (s) => {
     const m = Math.floor(s / 60)
     const r = s % 60
     return `${m}:${r.toString().padStart(2, '0')}`
+}
+
+const fmt = (iso) => {
+    if (!iso) return '—'
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 const getBlobDurationSeconds = (blob) =>
@@ -100,6 +103,64 @@ const tryParseJsonReply = (text) => {
     }
 }
 
+const extractOraclePayload = (text) => {
+    const raw = String(text || '')
+    const direct = tryParseJsonReply(raw)
+    if (direct) return { message: direct?.message, payload: direct, cleaned: raw }
+
+    // Handle replies that contain a fenced JSON block anywhere in the text.
+    const fenceRe = /```(?:json)?\s*([\s\S]*?)\s*```/gi
+    let match
+    let lastPayload = null
+    let cleaned = raw
+    while ((match = fenceRe.exec(raw)) !== null) {
+        const candidate = String(match[1] || '').trim()
+        if (!candidate.startsWith('{') || !candidate.endsWith('}')) continue
+        try {
+            const parsed = JSON.parse(candidate)
+            if (parsed && typeof parsed === 'object') {
+                lastPayload = parsed
+                // Remove this fenced block from display.
+                cleaned = cleaned.replace(match[0], '').trim()
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    // If the model started a fenced JSON block but never closed it, hide it from display.
+    const openFenceIdx = cleaned.search(/```(?:json)?/i)
+    if (openFenceIdx !== -1) {
+        cleaned = cleaned.slice(0, openFenceIdx).trim()
+    }
+
+    // Heuristic: sometimes the response includes JSON appended without fences; extract the last {...}.
+    if (!lastPayload) {
+        const start = raw.lastIndexOf('{')
+        const end = raw.lastIndexOf('}')
+        if (start !== -1 && end !== -1 && end > start) {
+            const candidate = raw.slice(start, end + 1).trim()
+            try {
+                const parsed = JSON.parse(candidate)
+                if (parsed && typeof parsed === 'object') {
+                    lastPayload = parsed
+                    cleaned = (raw.slice(0, start) + raw.slice(end + 1)).trim()
+                }
+            } catch {
+                // ignore
+            }
+        }
+    }
+
+    return { message: lastPayload?.message, payload: lastPayload, cleaned }
+}
+
+const normalizeOracleText = (text) => {
+    const { message, cleaned } = extractOraclePayload(text)
+    if (typeof message === 'string' && message.trim()) return message.trim()
+    return String(cleaned || '').trim()
+}
+
 export function Chat() {
     const bg = useColorModeValue('gray.50', 'gray.900')
     const cardBg = useColorModeValue('white', 'gray.800')
@@ -123,6 +184,10 @@ export function Chat() {
     const [messages, setMessages] = useState([])
     const [inputText, setInputText] = useState("")
     const [isThinking, setIsThinking] = useState(false)
+    const [isVoiceRecording, setIsVoiceRecording] = useState(false)
+
+    const [sessions, setSessions] = useState([])
+    const [isSessionsLoading, setIsSessionsLoading] = useState(false)
 
     const [showAnalysis, setShowAnalysis] = useState(false)
     const [analysis, setAnalysis] = useState(null)
@@ -140,6 +205,82 @@ export function Chat() {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages, isThinking])
 
+    const fetchSessions = async () => {
+        setIsSessionsLoading(true)
+        try {
+            const res = await fetch(`${API_BASE}/sessions/${USERNAME}`)
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const data = await res.json().catch(() => [])
+            setSessions(Array.isArray(data) ? data : [])
+        } catch (e) {
+            console.warn('Failed to fetch sessions:', e)
+        } finally {
+            setIsSessionsLoading(false)
+        }
+    }
+
+    const toMediaUrl = (p) => {
+        const raw = String(p || '').trim()
+        if (!raw) return null
+        if (/^https?:\/\//i.test(raw)) return raw
+        if (raw.startsWith('/')) return `${SERVER_BASE}${raw}`
+        return raw
+    }
+
+    const loadSession = async (sid) => {
+        const sessionId = String(sid || '').trim()
+        if (!sessionId) return false
+        try {
+            const res = await fetch(`${API_BASE}/sessions/${USERNAME}/${sessionId}`)
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const data = await res.json().catch(() => null)
+            const msgs = Array.isArray(data?.messages) ? data.messages : []
+
+            conversationIdRef.current = sessionId
+            setConversationId(sessionId)
+            try { localStorage.setItem(LAST_SESSION_KEY, sessionId) } catch { /* ignore */ }
+            setMessages(
+                msgs.map((m, i) => {
+                    const kind = m?.kind === 'voice' ? 'voice' : 'text'
+                    const sender = m?.sender === 'serene' ? 'oracle' : (m?.sender || 'oracle')
+                    const id = `${sessionId}-${m?.timestamp || i}`
+                    if (kind === 'voice') {
+                        return {
+                            id,
+                            kind: 'voice',
+                            sender,
+                            audioUrl: toMediaUrl(m?.audio_url || m?.audio_path),
+                            durationSeconds: Number(m?.duration_seconds || 0),
+                        }
+                    }
+                    return { id, kind: 'text', text: String(m?.text ?? ''), sender }
+                })
+            )
+            return true
+        } catch (e) {
+            console.warn('Failed to load session:', e)
+            return false
+        }
+    }
+
+    // Cache messages locally so reloads still show chat even if the server can't be reached.
+    useEffect(() => {
+        if (!conversationId) return
+        try {
+            const capped = messages.slice(-200).map(m => {
+                if (m?.kind !== 'voice') return m
+                const audioUrl = String(m?.audioUrl || '')
+                return {
+                    ...m,
+                    audioUrl: audioUrl.startsWith('blob:') ? null : m.audioUrl,
+                }
+            })
+            localStorage.setItem(sessionCacheKey(conversationId), JSON.stringify(capped))
+        } catch {
+            // ignore storage errors
+        }
+    }, [messages, conversationId])
+
     const startNewSession = async (endCurrentId = null) => {
         if (endCurrentId) {
             fetch(SESSION_END_URL, {
@@ -153,7 +294,9 @@ export function Chat() {
             const data = await res.json()
             conversationIdRef.current = data.conversation_id
             setConversationId(data.conversation_id)
+            try { localStorage.setItem(LAST_SESSION_KEY, data.conversation_id) } catch { /* ignore */ }
             setMessages([])
+            fetchSessions()
         } catch (e) {
             console.warn('Failed to start new session:', e)
         }
@@ -176,6 +319,7 @@ export function Chat() {
         } catch (e) {
             setAnalysis({ saved: true }) // still show success — data may have saved partially
         } finally {
+            fetchSessions()
             setIsAnalyzing(false)
         }
     }
@@ -197,8 +341,38 @@ export function Chat() {
                 console.warn('Hydration failed:', e)
             }
         }
+        const restoreOrStartSession = async () => {
+            let sid = null
+            try { sid = localStorage.getItem(LAST_SESSION_KEY) } catch { /* ignore */ }
+            if (sid) {
+                try {
+                    const ok = await loadSession(sid)
+                    if (ok) return
+                } catch {
+                    // fall back to local cache or a new session
+                }
+
+                try {
+                    const cached = localStorage.getItem(sessionCacheKey(sid))
+                    if (cached) {
+                        const parsed = JSON.parse(cached)
+                        if (Array.isArray(parsed)) {
+                            conversationIdRef.current = sid
+                            setConversationId(sid)
+                            setMessages(parsed)
+                            return
+                        }
+                    }
+                } catch {
+                    // ignore cache errors
+                }
+            }
+            await startNewSession()
+        }
+
         hydrate()
-        startNewSession()
+        fetchSessions()
+        restoreOrStartSession()
     }, [])
 
     const sendMessageText = async (text) => {
@@ -288,11 +462,16 @@ export function Chat() {
 
                 if (!acc.trim()) {
                     setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: '(No response)' } : m)))
+                } else {
+                    const finalText = normalizeOracleText(acc)
+                    if (finalText !== acc) {
+                        setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: finalText } : m)))
+                    }
                 }
             } else if (contentType.includes('application/json')) {
                 const response = await res.json().catch(() => ({}))
                 const oracleText = extractOracleTextFromJson(response)
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: oracleText || '(No response)', sender: 'oracle' }])
+                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText(oracleText || '(No response)'), sender: 'oracle' }])
             } else {
                 const raw = await res.text().catch(() => '')
                 let oracleText = raw
@@ -302,16 +481,19 @@ export function Chat() {
                 } catch {
                     // keep raw
                 }
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: (oracleText || '').trim() || '(No response)', sender: 'oracle' }])
+                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText((oracleText || '').trim() || '(No response)'), sender: 'oracle' }])
             }
         } catch (e) {
             console.error('Chat error:', e)
+            const msg = e?.message ? String(e.message) : 'Failed to get a reply.'
+            setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: `Error: ${msg}`, sender: 'oracle' }])
         } finally {
             setIsThinking(false)
         }
     }
 
     const sendVoiceMessage = async ({ blob }) => {
+        if (isThinking) return
         const tempId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
         const localUrl = URL.createObjectURL(blob)
         const durationSeconds = await getBlobDurationSeconds(blob)
@@ -322,6 +504,7 @@ export function Chat() {
             const form = new FormData()
             form.append('file', blob, 'voice.webm')
             form.append('duration_seconds', String(durationSeconds || 0))
+            if (conversationIdRef.current) form.append('conversation_id', conversationIdRef.current)
             const res = await fetch(`${API_BASE}/voice/${USERNAME}`, { method: 'POST', body: form })
             const data = await res.json().catch(() => ({}))
             if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`)
@@ -333,10 +516,12 @@ export function Chat() {
                 setMessages(prev => prev.map(m => (m.id === tempId ? { ...m, audioUrl: serverUrl } : m)))
             }
             if (oracle?.message) {
-                setMessages(prev => [...prev, { kind: 'text', text: oracle.message, sender: 'oracle' }])
+                setMessages(prev => [...prev, { kind: 'text', text: normalizeOracleText(oracle.message), sender: 'oracle' }])
             }
         } catch (e) {
             console.error('Voice error:', e)
+            const msg = e?.message ? String(e.message) : 'Failed to process voice.'
+            setMessages(prev => [...prev, { kind: 'text', text: `Error: ${msg}`, sender: 'oracle' }])
         } finally {
             setIsThinking(false)
         }
@@ -393,196 +578,275 @@ export function Chat() {
                     bg={cardBg}
                     borderRightWidth="1px"
                     borderRightColor={borderColor}
-                    px={6}
-                    py={6}
+                    overflowY="auto"
                     position="sticky"
                     top={0}
                     h="100vh"
-                    overflowY="auto"
                 >
-                    <HStack
-                        as="button"
-                        type="button"
-                        onClick={() => {
-                            setSidebarView('chat')
-                            setActivePanel(null)
-                        }}
-                        spacing={3}
-                        mb={6}
-                        w="full"
-                        textAlign="left"
-                        _hover={{ opacity: 0.92 }}
-                        _active={{ opacity: 0.85 }}
-                    >
-                        <Avatar size="md" src="/avatar.png" name="Oracle" />
-                        <VStack align="start" spacing={0}>
-                            <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
-                            <Heading size="sm" fontWeight="900" color="teal.900">Life Agent</Heading>
-                        </VStack>
-                    </HStack>
-
-                    <Box p={4} borderRadius="2xl" bg="teal.50" borderWidth="1px" borderColor="teal.100" mb={4}>
-                        <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={2}>
-                            Process Age
-                        </Text>
-                        <SimpleGrid columns={2} spacing={3}>
-                            <Box>
-                                <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.days}</Text>
-                                <Text fontSize="xs" fontWeight="800" color="teal.600">DAYS</Text>
-                            </Box>
-                            <Box>
-                                <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.weeks}</Text>
-                                <Text fontSize="xs" fontWeight="800" color="teal.600">WEEKS</Text>
-                            </Box>
-                        </SimpleGrid>
-                    </Box>
-
-                    <Box mb={5}>
-                        <Text fontSize="10px" fontWeight="900" color="teal.700" mb={3} textTransform="uppercase">Experience</Text>
-                        <Progress value={Math.min(100, (xp % 1000) / 10)} size="sm" colorScheme="teal" borderRadius="full" />
-                        <Text mt={2} fontSize="xs" color="teal.700" fontWeight="800">{xp} XP</Text>
-                    </Box>
-
-                    <Divider my={5} borderColor="teal.100" />
-
-                    <VStack align="stretch" spacing={2}>
-                        <Button
-                            leftIcon={<FiMessageSquare />}
-                            colorScheme="teal"
-                            variant={sidebarView === 'chat' ? 'solid' : 'ghost'}
-                            borderRadius="xl"
-                            justifyContent="flex-start"
+                    <Box px={6} pt={6} pb={5}>
+                        <HStack
+                            as="button"
+                            type="button"
                             onClick={() => {
                                 setSidebarView('chat')
                                 setActivePanel(null)
                             }}
+                            spacing={3}
+                            mb={6}
+                            w="full"
+                            textAlign="left"
+                            _hover={{ opacity: 0.92 }}
+                            _active={{ opacity: 0.85 }}
                         >
-                            Chat
-                        </Button>
-                        <Button
-                            leftIcon={<FiZap />}
-                            colorScheme="teal"
-                            variant={sidebarView === 'focus' ? 'solid' : 'ghost'}
-                            borderRadius="xl"
-                            justifyContent="flex-start"
-                            onClick={() => {
-                                setSidebarView('focus')
-                                setActivePanel('focus')
-                            }}
-                        >
-                            Focus
-                        </Button>
-                        <Button
-                            leftIcon={<FiClock />}
-                            colorScheme="teal"
-                            variant={sidebarView === 'log' ? 'solid' : 'ghost'}
-                            borderRadius="xl"
-                            justifyContent="flex-start"
-                            onClick={() => {
-                                setSidebarView('log')
-                                setActivePanel('log')
-                            }}
-                        >
-                            Log
-                        </Button>
-                        <Button
-                            leftIcon={<FiBarChart2 />}
-                            colorScheme="teal"
-                            variant={sidebarView === 'stats' ? 'solid' : 'ghost'}
-                            borderRadius="xl"
-                            justifyContent="flex-start"
-                            onClick={() => {
-                                setSidebarView('stats')
-                                setActivePanel('stats')
-                            }}
-                        >
-                            Stats
-                        </Button>
-                        <Button
-                            leftIcon={<FiUser />}
-                            colorScheme="teal"
-                            variant={sidebarView === 'profile' ? 'solid' : 'ghost'}
-                            borderRadius="xl"
-                            justifyContent="flex-start"
-                            onClick={() => {
-                                setSidebarView('profile')
-                                setActivePanel('profile')
-                            }}
-                        >
-                            Profile
-                        </Button>
-                    </VStack>
+                            <Avatar size="md" src="/avatar.png" name="Serene" />
+                            <VStack align="start" spacing={0}>
+                                <Badge colorScheme="teal" borderRadius="full">Rank {level}</Badge>
+                            <Heading
+                                size="sm"
+                                fontWeight="700"
+                                color="teal.600"
+                                sx={{ fontFamily: 'var(--serene-script)' }}
+                            >
+                                Serene
+                            </Heading>
+                            </VStack>
+                        </HStack>
 
-                    <Divider my={5} borderColor="teal.100" />
-
-                    {sidebarView === 'stats' && (
-                        <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
-                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
-                                Progress
+                        <Box p={4} borderRadius="2xl" bg="teal.50" borderWidth="1px" borderColor="teal.100" mb={4}>
+                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={2}>
+                                Process Age
                             </Text>
-                            <SimpleGrid columns={3} spacing={3}>
+                            <SimpleGrid columns={2} spacing={3}>
                                 <Box>
-                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.streak ?? 0}</Text>
-                                    <Text fontSize="xs" fontWeight="800" color="teal.600">STREAK</Text>
-                                </Box>
-                                <Box>
-                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_days_active ?? 0}</Text>
+                                    <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.days}</Text>
                                     <Text fontSize="xs" fontWeight="800" color="teal.600">DAYS</Text>
                                 </Box>
                                 <Box>
-                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_tasks_completed ?? 0}</Text>
-                                    <Text fontSize="xs" fontWeight="800" color="teal.600">DONE</Text>
+                                    <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.weeks}</Text>
+                                    <Text fontSize="xs" fontWeight="800" color="teal.600">WEEKS</Text>
                                 </Box>
                             </SimpleGrid>
                         </Box>
-                    )}
 
-                    {sidebarView === 'log' && (
-                        <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
-                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
-                                Recent
-                            </Text>
-                            <VStack align="stretch" spacing={2}>
-                                {(messages.slice(-5)).reverse().map((m, idx) => (
-                                    <Box key={`${m.id || idx}-log`} p={3} borderRadius="xl" bg="teal.50" borderWidth="1px" borderColor="teal.100">
-                                        <Text fontSize="xs" color="teal.700" fontWeight="900" mb={1} textTransform="uppercase">
-                                            {m.sender === 'user' ? 'You' : 'Oracle'}
+                        <Box mb={5}>
+                            <Text fontSize="10px" fontWeight="900" color="teal.700" mb={3} textTransform="uppercase">Experience</Text>
+                            <Progress value={Math.min(100, (xp % 1000) / 10)} size="sm" colorScheme="teal" borderRadius="full" />
+                            <Text mt={2} fontSize="xs" color="teal.700" fontWeight="800">{xp} XP</Text>
+                        </Box>
+
+                        <Divider my={5} borderColor="teal.100" />
+
+                        <VStack align="stretch" spacing={2}>
+                            <Button
+                                leftIcon={<FiMessageSquare />}
+                                colorScheme="teal"
+                                variant={sidebarView === 'chat' ? 'solid' : 'ghost'}
+                                borderRadius="xl"
+                                justifyContent="flex-start"
+                                onClick={() => {
+                                    setSidebarView('chat')
+                                    setActivePanel(null)
+                                }}
+                            >
+                                Chat
+                            </Button>
+                            <Button
+                                leftIcon={<FiZap />}
+                                colorScheme="teal"
+                                variant={sidebarView === 'focus' ? 'solid' : 'ghost'}
+                                borderRadius="xl"
+                                justifyContent="flex-start"
+                                onClick={() => {
+                                    setSidebarView('focus')
+                                    setActivePanel('focus')
+                                }}
+                            >
+                                Focus
+                            </Button>
+                            <Button
+                                leftIcon={<FiClock />}
+                                colorScheme="teal"
+                                variant={sidebarView === 'log' ? 'solid' : 'ghost'}
+                                borderRadius="xl"
+                                justifyContent="flex-start"
+                                onClick={() => {
+                                    setSidebarView('log')
+                                    setActivePanel('log')
+                                }}
+                            >
+                                Log
+                            </Button>
+                            <Button
+                                leftIcon={<FiBarChart2 />}
+                                colorScheme="teal"
+                                variant={sidebarView === 'stats' ? 'solid' : 'ghost'}
+                                borderRadius="xl"
+                                justifyContent="flex-start"
+                                onClick={() => {
+                                    setSidebarView('stats')
+                                    setActivePanel('stats')
+                                }}
+                            >
+                                Stats
+                            </Button>
+                            <Button
+                                leftIcon={<FiUser />}
+                                colorScheme="teal"
+                                variant={sidebarView === 'profile' ? 'solid' : 'ghost'}
+                                borderRadius="xl"
+                                justifyContent="flex-start"
+                                onClick={() => {
+                                    setSidebarView('profile')
+                                    setActivePanel('profile')
+                                }}
+                            >
+                                Profile
+                            </Button>
+                        </VStack>
+                    </Box>
+
+                    <Box px={6} pb={6}>
+                        {sidebarView === 'chat' && (
+                            <HStack
+                                justify="space-between"
+                                mb={3}
+                                position="sticky"
+                                top={0}
+                                zIndex={2}
+                                bg={cardBg}
+                                pt={4}
+                                pb={2}
+                            >
+                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase">
+                                    Chats
+                                </Text>
+                                <IconButton
+                                    aria-label="Refresh chats"
+                                    icon={<FiRefreshCw />}
+                                    size="xs"
+                                    variant="ghost"
+                                    colorScheme="teal"
+                                    onClick={fetchSessions}
+                                    isLoading={isSessionsLoading}
+                                />
+                            </HStack>
+                        )}
+
+                        {sidebarView === 'chat' && (() => {
+                            const visibleSessions = sessions.filter(s => Number(s?.message_count ?? 0) > 0)
+                            if (isSessionsLoading && visibleSessions.length === 0) {
+                                return (
+                                    <HStack justify="center" py={4}>
+                                        <Spinner size="sm" />
+                                    </HStack>
+                                )
+                            }
+                            return (
+                                <VStack align="stretch" spacing={1}>
+                                    {visibleSessions.map((s) => {
+                                        const sid = s?.session_id
+                                        const active = sid && sid === conversationId
+                                        return (
+                                            <Button
+                                                key={sid}
+                                                variant={active ? 'solid' : 'ghost'}
+                                                colorScheme="teal"
+                                                borderRadius="xl"
+                                                justifyContent="flex-start"
+                                                onClick={() => loadSession(sid)}
+                                                h="60px"
+                                                px={3}
+                                                whiteSpace="normal"
+                                            >
+                                                <VStack align="start" spacing={0} w="full">
+                                                    <Text fontSize="sm" fontWeight="900" noOfLines={1}>
+                                                        {fmt(s?.started_at)}
+                                                    </Text>
+                                                    <Text fontSize="xs" fontWeight="700" color={muted} noOfLines={1}>
+                                                        {Number(s?.message_count ?? 0)} msgs{s?.ended_at ? '' : ' • active'}
+                                                    </Text>
+                                                </VStack>
+                                            </Button>
+                                        )
+                                    })}
+                                    {visibleSessions.length === 0 && (
+                                        <Text fontSize="sm" color={muted} fontWeight="700" py={2}>
+                                            No chats yet.
                                         </Text>
-                                        <Text fontSize="sm" fontWeight="800" color="teal.900" noOfLines={2}>
-                                            {m.kind === 'voice' ? 'Voice message' : (m.text || '')}
-                                        </Text>
+                                    )}
+                                </VStack>
+                            )
+                        })()}
+
+                        {sidebarView === 'stats' && (
+                            <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
+                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
+                                    Progress
+                                </Text>
+                                <SimpleGrid columns={3} spacing={3}>
+                                    <Box>
+                                        <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.streak ?? 0}</Text>
+                                        <Text fontSize="xs" fontWeight="800" color="teal.600">STREAK</Text>
                                     </Box>
-                                ))}
-                                {messages.length === 0 && (
-                                    <Text fontSize="sm" color="teal.700" fontWeight="800">
-                                        No messages yet.
-                                    </Text>
-                                )}
-                            </VStack>
-                        </Box>
-                    )}
+                                    <Box>
+                                        <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_days_active ?? 0}</Text>
+                                        <Text fontSize="xs" fontWeight="800" color="teal.600">DAYS</Text>
+                                    </Box>
+                                    <Box>
+                                        <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_tasks_completed ?? 0}</Text>
+                                        <Text fontSize="xs" fontWeight="800" color="teal.600">DONE</Text>
+                                    </Box>
+                                </SimpleGrid>
+                            </Box>
+                        )}
 
-                    {sidebarView === 'profile' && (
-                        <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
-                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
-                                Agent
-                            </Text>
-                            <VStack align="stretch" spacing={2}>
-                                <HStack justify="space-between">
-                                    <Text fontSize="sm" fontWeight="900" color="teal.700">Username</Text>
-                                    <Text fontSize="sm" fontWeight="900" color="teal.900">{USERNAME}</Text>
-                                </HStack>
-                                <HStack justify="space-between">
-                                    <Text fontSize="sm" fontWeight="900" color="teal.700">Rank</Text>
-                                    <Badge colorScheme="teal" borderRadius="full">Level {level}</Badge>
-                                </HStack>
-                                <HStack justify="space-between">
-                                    <Text fontSize="sm" fontWeight="900" color="teal.700">XP</Text>
-                                    <Text fontSize="sm" fontWeight="900" color="teal.900">{xp}</Text>
-                                </HStack>
-                            </VStack>
-                        </Box>
-                    )}
+                        {sidebarView === 'log' && (
+                            <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
+                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
+                                    Recent
+                                </Text>
+                                <VStack align="stretch" spacing={2}>
+                                    {(messages.slice(-5)).reverse().map((m, idx) => (
+                                        <Box key={`${m.id || idx}-log`} p={3} borderRadius="xl" bg="teal.50" borderWidth="1px" borderColor="teal.100">
+                                            <Text fontSize="xs" color="teal.700" fontWeight="900" mb={1} textTransform="uppercase">
+                                                {m.sender === 'user' ? 'You' : 'Serene'}
+                                            </Text>
+                                            <Text fontSize="sm" fontWeight="800" color="teal.900" noOfLines={2}>
+                                                {m.kind === 'voice' ? 'Voice message' : (m.text || '')}
+                                            </Text>
+                                        </Box>
+                                    ))}
+                                    {messages.length === 0 && (
+                                        <Text fontSize="sm" color="teal.700" fontWeight="800">
+                                            No messages yet.
+                                        </Text>
+                                    )}
+                                </VStack>
+                            </Box>
+                        )}
+
+                        {sidebarView === 'profile' && (
+                            <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
+                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
+                                    Agent
+                                </Text>
+                                <VStack align="stretch" spacing={2}>
+                                    <HStack justify="space-between">
+                                        <Text fontSize="sm" fontWeight="900" color="teal.700">Username</Text>
+                                        <Text fontSize="sm" fontWeight="900" color="teal.900">{USERNAME}</Text>
+                                    </HStack>
+                                    <HStack justify="space-between">
+                                        <Text fontSize="sm" fontWeight="900" color="teal.700">Rank</Text>
+                                        <Badge colorScheme="teal" borderRadius="full">Level {level}</Badge>
+                                    </HStack>
+                                    <HStack justify="space-between">
+                                        <Text fontSize="sm" fontWeight="900" color="teal.700">XP</Text>
+                                        <Text fontSize="sm" fontWeight="900" color="teal.900">{xp}</Text>
+                                    </HStack>
+                                </VStack>
+                            </Box>
+                        )}
+                    </Box>
                 </Box>
 
                 {/* Right Panel */}
@@ -618,9 +882,22 @@ export function Chat() {
                 >
                     <HStack w="full" maxW="980px" mx="auto" justify="space-between">
                         <HStack spacing={3}>
-                            <Avatar size="md" src="/avatar.png" name="Oracle" border="2px solid" borderColor="teal.200" />
+                            <Avatar size="md" src="/avatar.png" name="Serene" border="2px solid" borderColor="teal.200" />
                             <Circle size="3" bg="teal.400" className="pulse-animation" />
-                            <Heading size="md" fontWeight="900" letterSpacing="-0.3px" color="teal.900">Oracle</Heading>
+                            <Heading
+                                size="md"
+                                fontWeight="900"
+                                letterSpacing="-0.2px"
+                                color="teal.600"
+                                sx={{
+                                    fontFamily: 'var(--serene-script)',
+                                    textShadow: '0 1px 0 rgba(255,255,255,0.6)',
+                                    fontSize: '34px',
+                                    lineHeight: '1',
+                                }}
+                            >
+                                Serene
+                            </Heading>
                         </HStack>
                         <HStack spacing={2}>
                             {messages.length > 0 && (
@@ -654,7 +931,7 @@ export function Chat() {
 
                 <Box flex={1} position="relative" zIndex={1} overflowY="auto" px={{ base: 4, lg: 8 }} py={6}>
                     {showEmpty ? (
-                        <VStack mt={{ base: 16, lg: 28 }} spacing={3} align="center" textAlign="center">
+                        <VStack mt={{ base: 28, lg: 44 }} spacing={3} align="center" textAlign="center">
                             <Heading size="2xl" fontWeight="900" letterSpacing="-1px">
                                 What can I help with?
                             </Heading>
@@ -753,26 +1030,70 @@ export function Chat() {
                     <Box w="full" maxW="980px" mx="auto">
                         <form onSubmit={onSubmit}>
                             <InputGroup size="md">
-                                <Input
-                                    pl="1.25rem"
-                                    pr="8.5rem"
-                                    py={6}
-                                    placeholder="Message Oracle…"
-                                    bg="gray.50"
-                                    border="1px solid"
-                                    borderColor="gray.100"
-                                    borderRadius="xl"
-                                    fontWeight="600"
-                                    value={inputText}
-                                    onChange={(e) => setInputText(e.target.value)}
-                                />
-                                <InputRightElement width="8.5rem" h="full" pr={2}>
-                                    <HStack spacing={2}>
-                                        <VoiceRecorderButton
-                                            ref={voiceRecorderRef}
-                                            size="sm"
-                                            onRecordingComplete={(payload) => sendVoiceMessage(payload)}
-                                        />
+	                                <Input
+	                                    display={isVoiceRecording ? 'none' : 'block'}
+	                                    pl="1.25rem"
+	                                    pr="8.5rem"
+	                                    py={6}
+	                                    placeholder="Message Serene…"
+	                                    bg="gray.50"
+	                                    border="1px solid"
+	                                    borderColor="gray.100"
+	                                    borderRadius="xl"
+	                                    fontWeight="600"
+	                                    value={inputText}
+	                                    onChange={(e) => setInputText(e.target.value)}
+	                                />
+	                                {isVoiceRecording && (
+	                                    <Box
+	                                        w="full"
+	                                        pl="1.25rem"
+	                                        pr="8.5rem"
+	                                        py={4}
+	                                        bg="gray.50"
+	                                        border="1px solid"
+	                                        borderColor="gray.100"
+	                                        borderRadius="xl"
+	                                        display="flex"
+	                                        alignItems="center"
+	                                        justifyContent="space-between"
+	                                        gap={3}
+	                                        sx={{
+	                                            '.rec-bar': { animation: 'rec-pulse 700ms ease-in-out infinite alternate' },
+	                                            '.rec-bar--2': { animationDelay: '100ms' },
+	                                            '.rec-bar--3': { animationDelay: '220ms' },
+	                                            '.rec-bar--4': { animationDelay: '320ms' },
+	                                            '@keyframes rec-pulse': {
+	                                                '0%': { transform: 'scaleY(0.55)', opacity: 0.65 },
+	                                                '100%': { transform: 'scaleY(1.15)', opacity: 1 },
+	                                            },
+	                                        }}
+	                                    >
+	                                        <Text fontWeight="800" color="teal.700">
+	                                            Listening…
+	                                        </Text>
+	                                        <HStack spacing="2px" align="flex-end" h="18px">
+	                                            <Box w="3px" h="6px" bg="teal.500" borderRadius="999px" className="rec-bar" />
+	                                            <Box w="3px" h="12px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--2" />
+	                                            <Box w="3px" h="9px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--3" />
+	                                            <Box w="3px" h="14px" bg="teal.500" borderRadius="999px" className="rec-bar rec-bar--4" />
+	                                        </HStack>
+	                                    </Box>
+	                                )}
+	                                <InputRightElement width="8.5rem" h="full" pr={2}>
+	                                    <HStack spacing={2}>
+	                                        <VoiceRecorderButton
+	                                            ref={voiceRecorderRef}
+	                                            size="sm"
+	                                            isDisabled={!conversationId}
+	                                            isPaused={isThinking}
+	                                            autoSendOnSilence
+	                                            silenceMs={3500}
+	                                            minRecordMs={800}
+	                                            volumeThreshold={0.015}
+	                                            onRecordingStateChange={({ isRecording }) => setIsVoiceRecording(Boolean(isRecording))}
+	                                            onRecordingComplete={(payload) => sendVoiceMessage(payload)}
+	                                        />
                                         <IconButton
                                             size="sm"
                                             colorScheme="teal"
