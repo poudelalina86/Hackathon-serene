@@ -57,10 +57,19 @@ const SESSION_NEW_URL = `${CHAT_SERVER_BASE}/v1/session/new`
 const SESSION_END_URL = `${CHAT_SERVER_BASE}/v1/session/end`
 const USERNAME = getUsername() || "guest"
 
+const LAST_SESSION_KEY = `serene:lastSession:${USERNAME}`
+const sessionCacheKey = (sessionId) => `serene:sessionCache:${USERNAME}:${sessionId}`
+
 const formatSeconds = (s) => {
     const m = Math.floor(s / 60)
     const r = s % 60
     return `${m}:${r.toString().padStart(2, '0')}`
+}
+
+const fmt = (iso) => {
+    if (!iso) return '—'
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 const getBlobDurationSeconds = (blob) =>
@@ -106,6 +115,10 @@ export function Chat() {
     const [messages, setMessages] = useState([])
     const [inputText, setInputText] = useState("")
     const [isThinking, setIsThinking] = useState(false)
+    const [isVoiceRecording, setIsVoiceRecording] = useState(false)
+
+    const [sessions, setSessions] = useState([])
+    const [isSessionsLoading, setIsSessionsLoading] = useState(false)
 
     const [showAnalysis, setShowAnalysis] = useState(false)
     const [analysis, setAnalysis] = useState(null)
@@ -123,6 +136,82 @@ export function Chat() {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages, isThinking])
 
+    const fetchSessions = async () => {
+        setIsSessionsLoading(true)
+        try {
+            const res = await fetch(`${API_BASE}/sessions/${USERNAME}`)
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const data = await res.json().catch(() => [])
+            setSessions(Array.isArray(data) ? data : [])
+        } catch (e) {
+            console.warn('Failed to fetch sessions:', e)
+        } finally {
+            setIsSessionsLoading(false)
+        }
+    }
+
+    const toMediaUrl = (p) => {
+        const raw = String(p || '').trim()
+        if (!raw) return null
+        if (/^https?:\/\//i.test(raw)) return raw
+        if (raw.startsWith('/')) return `${SERVER_BASE}${raw}`
+        return raw
+    }
+
+    const loadSession = async (sid) => {
+        const sessionId = String(sid || '').trim()
+        if (!sessionId) return false
+        try {
+            const res = await fetch(`${API_BASE}/sessions/${USERNAME}/${sessionId}`)
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const data = await res.json().catch(() => null)
+            const msgs = Array.isArray(data?.messages) ? data.messages : []
+
+            conversationIdRef.current = sessionId
+            setConversationId(sessionId)
+            try { localStorage.setItem(LAST_SESSION_KEY, sessionId) } catch { /* ignore */ }
+            setMessages(
+                msgs.map((m, i) => {
+                    const kind = m?.kind === 'voice' ? 'voice' : 'text'
+                    const sender = m?.sender === 'serene' ? 'oracle' : (m?.sender || 'oracle')
+                    const id = `${sessionId}-${m?.timestamp || i}`
+                    if (kind === 'voice') {
+                        return {
+                            id,
+                            kind: 'voice',
+                            sender,
+                            audioUrl: toMediaUrl(m?.audio_url || m?.audio_path),
+                            durationSeconds: Number(m?.duration_seconds || 0),
+                        }
+                    }
+                    return { id, kind: 'text', text: String(m?.text ?? ''), sender }
+                })
+            )
+            return true
+        } catch (e) {
+            console.warn('Failed to load session:', e)
+            return false
+        }
+    }
+
+    // Cache messages locally so reloads still show chat even if the server can't be reached.
+    useEffect(() => {
+        if (!conversationId) return
+        try {
+            const capped = messages.slice(-200).map(m => {
+                if (m?.kind !== 'voice') return m
+                const audioUrl = String(m?.audioUrl || '')
+                return {
+                    ...m,
+                    audioUrl: audioUrl.startsWith('blob:') ? null : m.audioUrl,
+                }
+            })
+            localStorage.setItem(sessionCacheKey(conversationId), JSON.stringify(capped))
+        } catch {
+            // ignore storage errors
+        }
+    }, [messages, conversationId])
+
     const startNewSession = async (endCurrentId = null) => {
         if (endCurrentId) {
             fetch(SESSION_END_URL, {
@@ -136,7 +225,9 @@ export function Chat() {
             const data = await res.json()
             conversationIdRef.current = data.conversation_id
             setConversationId(data.conversation_id)
+            try { localStorage.setItem(LAST_SESSION_KEY, data.conversation_id) } catch { /* ignore */ }
             setMessages([])
+            fetchSessions()
         } catch (e) {
             console.warn('Failed to start new session:', e)
         }
@@ -159,6 +250,7 @@ export function Chat() {
         } catch (e) {
             setAnalysis({ saved: true }) // still show success — data may have saved partially
         } finally {
+            fetchSessions()
             setIsAnalyzing(false)
         }
     }
@@ -180,8 +272,38 @@ export function Chat() {
                 console.warn('Hydration failed:', e)
             }
         }
+        const restoreOrStartSession = async () => {
+            let sid = null
+            try { sid = localStorage.getItem(LAST_SESSION_KEY) } catch { /* ignore */ }
+            if (sid) {
+                try {
+                    const ok = await loadSession(sid)
+                    if (ok) return
+                } catch {
+                    // fall back to local cache or a new session
+                }
+
+                try {
+                    const cached = localStorage.getItem(sessionCacheKey(sid))
+                    if (cached) {
+                        const parsed = JSON.parse(cached)
+                        if (Array.isArray(parsed)) {
+                            conversationIdRef.current = sid
+                            setConversationId(sid)
+                            setMessages(parsed)
+                            return
+                        }
+                    }
+                } catch {
+                    // ignore cache errors
+                }
+            }
+            await startNewSession()
+        }
+
         hydrate()
-        startNewSession()
+        fetchSessions()
+        restoreOrStartSession()
     }, [])
 
     const sendMessageText = async (text) => {
@@ -271,11 +393,16 @@ export function Chat() {
 
                 if (!acc.trim()) {
                     setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: '(No response)' } : m)))
+                } else {
+                    const finalText = normalizeOracleText(acc)
+                    if (finalText !== acc) {
+                        setMessages(prev => prev.map(m => (m.id === oracleMsgId ? { ...m, text: finalText } : m)))
+                    }
                 }
             } else if (contentType.includes('application/json')) {
                 const response = await res.json().catch(() => ({}))
                 const oracleText = extractOracleTextFromJson(response)
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: oracleText || '(No response)', sender: 'oracle' }])
+                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText(oracleText || '(No response)'), sender: 'oracle' }])
             } else {
                 const raw = await res.text().catch(() => '')
                 let oracleText = raw
@@ -285,16 +412,19 @@ export function Chat() {
                 } catch {
                     // keep raw
                 }
-                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: (oracleText || '').trim() || '(No response)', sender: 'oracle' }])
+                setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: normalizeOracleText((oracleText || '').trim() || '(No response)'), sender: 'oracle' }])
             }
         } catch (e) {
             console.error('Chat error:', e)
+            const msg = e?.message ? String(e.message) : 'Failed to get a reply.'
+            setMessages(prev => [...prev, { id: oracleMsgId, kind: 'text', text: `Error: ${msg}`, sender: 'oracle' }])
         } finally {
             setIsThinking(false)
         }
     }
 
     const sendVoiceMessage = async ({ blob }) => {
+        if (isThinking) return
         const tempId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
         const localUrl = URL.createObjectURL(blob)
         const durationSeconds = await getBlobDurationSeconds(blob)
@@ -305,6 +435,7 @@ export function Chat() {
             const form = new FormData()
             form.append('file', blob, 'voice.webm')
             form.append('duration_seconds', String(durationSeconds || 0))
+            if (conversationIdRef.current) form.append('conversation_id', conversationIdRef.current)
             const res = await fetch(`${API_BASE}/voice/${USERNAME}`, { method: 'POST', body: form })
             const data = await res.json().catch(() => ({}))
             if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`)
@@ -316,10 +447,12 @@ export function Chat() {
                 setMessages(prev => prev.map(m => (m.id === tempId ? { ...m, audioUrl: serverUrl } : m)))
             }
             if (oracle?.message) {
-                setMessages(prev => [...prev, { kind: 'text', text: oracle.message, sender: 'oracle' }])
+                setMessages(prev => [...prev, { kind: 'text', text: normalizeOracleText(oracle.message), sender: 'oracle' }])
             }
         } catch (e) {
             console.error('Voice error:', e)
+            const msg = e?.message ? String(e.message) : 'Failed to process voice.'
+            setMessages(prev => [...prev, { kind: 'text', text: `Error: ${msg}`, sender: 'oracle' }])
         } finally {
             setIsThinking(false)
         }
@@ -376,12 +509,10 @@ export function Chat() {
                     bg={cardBg}
                     borderRightWidth="1px"
                     borderRightColor={borderColor}
-                    px={6}
-                    py={6}
+                    overflowY="auto"
                     position="sticky"
                     top={0}
                     h="100vh"
-                    overflowY="auto"
                 >
                     <HStack
                         as="button"
@@ -439,6 +570,12 @@ export function Chat() {
                                 setSidebarView('chat')
                                 setActivePanel(null)
                             }}
+                            spacing={3}
+                            mb={6}
+                            w="full"
+                            textAlign="left"
+                            _hover={{ opacity: 0.92 }}
+                            _active={{ opacity: 0.85 }}
                         >
                             Chat
                         </Button>
@@ -518,27 +655,21 @@ export function Chat() {
 
                     <Divider my={5} borderColor="teal.100" />
 
-                    {sidebarView === 'stats' && (
-                        <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
-                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
-                                Progress
+                        <Box p={4} borderRadius="2xl" bg="teal.50" borderWidth="1px" borderColor="teal.100" mb={4}>
+                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={2}>
+                                Process Age
                             </Text>
-                            <SimpleGrid columns={3} spacing={3}>
+                            <SimpleGrid columns={2} spacing={3}>
                                 <Box>
-                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.streak ?? 0}</Text>
-                                    <Text fontSize="xs" fontWeight="800" color="teal.600">STREAK</Text>
-                                </Box>
-                                <Box>
-                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_days_active ?? 0}</Text>
+                                    <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.days}</Text>
                                     <Text fontSize="xs" fontWeight="800" color="teal.600">DAYS</Text>
                                 </Box>
                                 <Box>
-                                    <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_tasks_completed ?? 0}</Text>
-                                    <Text fontSize="xs" fontWeight="800" color="teal.600">DONE</Text>
+                                    <Text fontSize="2xl" fontWeight="900" lineHeight="1" color="teal.900">{processStats.weeks}</Text>
+                                    <Text fontSize="xs" fontWeight="800" color="teal.600">WEEKS</Text>
                                 </Box>
                             </SimpleGrid>
                         </Box>
-                    )}
 
                     {sidebarView === 'log' && (
                         <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
@@ -554,38 +685,80 @@ export function Chat() {
                                         <Text fontSize="sm" fontWeight="800" color="teal.900" noOfLines={2}>
                                             {m.kind === 'voice' ? 'Voice message' : (m.text || '')}
                                         </Text>
-                                    </Box>
-                                ))}
-                                {messages.length === 0 && (
-                                    <Text fontSize="sm" color="teal.700" fontWeight="800">
-                                        No messages yet.
-                                    </Text>
-                                )}
-                            </VStack>
-                        </Box>
-                    )}
+                                    )}
+                                </VStack>
+                            )
+                        })()}
 
-                    {sidebarView === 'profile' && (
-                        <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
-                            <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
-                                Agent
-                            </Text>
-                            <VStack align="stretch" spacing={2}>
-                                <HStack justify="space-between">
-                                    <Text fontSize="sm" fontWeight="900" color="teal.700">Username</Text>
-                                    <Text fontSize="sm" fontWeight="900" color="teal.900">{USERNAME}</Text>
-                                </HStack>
-                                <HStack justify="space-between">
-                                    <Text fontSize="sm" fontWeight="900" color="teal.700">Rank</Text>
-                                    <Badge colorScheme="teal" borderRadius="full">Level {level}</Badge>
-                                </HStack>
-                                <HStack justify="space-between">
-                                    <Text fontSize="sm" fontWeight="900" color="teal.700">XP</Text>
-                                    <Text fontSize="sm" fontWeight="900" color="teal.900">{xp}</Text>
-                                </HStack>
-                            </VStack>
-                        </Box>
-                    )}
+                        {sidebarView === 'stats' && (
+                            <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
+                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
+                                    Progress
+                                </Text>
+                                <SimpleGrid columns={3} spacing={3}>
+                                    <Box>
+                                        <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.streak ?? 0}</Text>
+                                        <Text fontSize="xs" fontWeight="800" color="teal.600">STREAK</Text>
+                                    </Box>
+                                    <Box>
+                                        <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_days_active ?? 0}</Text>
+                                        <Text fontSize="xs" fontWeight="800" color="teal.600">DAYS</Text>
+                                    </Box>
+                                    <Box>
+                                        <Text fontSize="xl" fontWeight="900" lineHeight="1" color="teal.900">{progress.total_tasks_completed ?? 0}</Text>
+                                        <Text fontSize="xs" fontWeight="800" color="teal.600">DONE</Text>
+                                    </Box>
+                                </SimpleGrid>
+                            </Box>
+                        )}
+
+                        {sidebarView === 'log' && (
+                            <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
+                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
+                                    Recent
+                                </Text>
+                                <VStack align="stretch" spacing={2}>
+                                    {(messages.slice(-5)).reverse().map((m, idx) => (
+                                        <Box key={`${m.id || idx}-log`} p={3} borderRadius="xl" bg="teal.50" borderWidth="1px" borderColor="teal.100">
+                                            <Text fontSize="xs" color="teal.700" fontWeight="900" mb={1} textTransform="uppercase">
+                                                {m.sender === 'user' ? 'You' : 'Serene'}
+                                            </Text>
+                                            <Text fontSize="sm" fontWeight="800" color="teal.900" noOfLines={2}>
+                                                {m.kind === 'voice' ? 'Voice message' : (m.text || '')}
+                                            </Text>
+                                        </Box>
+                                    ))}
+                                    {messages.length === 0 && (
+                                        <Text fontSize="sm" color="teal.700" fontWeight="800">
+                                            No messages yet.
+                                        </Text>
+                                    )}
+                                </VStack>
+                            </Box>
+                        )}
+
+                        {sidebarView === 'profile' && (
+                            <Box p={4} borderRadius="2xl" bg="white" borderWidth="1px" borderColor="teal.100">
+                                <Text fontSize="10px" fontWeight="900" color="teal.700" textTransform="uppercase" mb={3}>
+                                    Agent
+                                </Text>
+                                <VStack align="stretch" spacing={2}>
+                                    <HStack justify="space-between">
+                                        <Text fontSize="sm" fontWeight="900" color="teal.700">Username</Text>
+                                        <Text fontSize="sm" fontWeight="900" color="teal.900">{USERNAME}</Text>
+                                    </HStack>
+                                    <HStack justify="space-between">
+                                        <Text fontSize="sm" fontWeight="900" color="teal.700">Rank</Text>
+                                        <Badge colorScheme="teal" borderRadius="full">Level {level}</Badge>
+                                    </HStack>
+                                    <HStack justify="space-between">
+                                        <Text fontSize="sm" fontWeight="900" color="teal.700">XP</Text>
+                                        <Text fontSize="sm" fontWeight="900" color="teal.900">{xp}</Text>
+                                    </HStack>
+                                </VStack>
+                            </Box>
+                        )}
+                    </Box>
                 </Box>
 
                 {/* Right Panel */}
@@ -677,7 +850,7 @@ export function Chat() {
 
                 <Box flex={1} position="relative" zIndex={1} overflowY="auto" px={{ base: 4, lg: 8 }} py={6}>
                     {showEmpty ? (
-                        <VStack mt={{ base: 16, lg: 28 }} spacing={3} align="center" textAlign="center">
+                        <VStack mt={{ base: 28, lg: 44 }} spacing={3} align="center" textAlign="center">
                             <Heading size="2xl" fontWeight="900" letterSpacing="-1px">
                                 What can I help with?
                             </Heading>
